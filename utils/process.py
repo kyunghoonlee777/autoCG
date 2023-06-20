@@ -150,7 +150,7 @@ def get_permuted_matrix(matrix,permutation):
             permuted_matrix[permutation[i]][permutation[j]] = matrix[i][j]
     return permuted_matrix
 
-def get_adj_matrix_from_distance(molecule,coeff = 1.35):
+def get_adj_matrix_from_distance(molecule,coeff = 1.10):
     """
     Returns adj_matrix from 3d coordinate of given molecule
     It recognizes bond between two atoms, if the sum of radius * coeff is less than distance between two atoms
@@ -164,23 +164,17 @@ def get_adj_matrix_from_distance(molecule,coeff = 1.35):
         connectivity matrix between atoms
          
     """
-    ratio_matrix = molecule.get_ratio_matrix()
-    adj = np.where(ratio_matrix<coeff,1,0)
+    atom_list = molecule.atom_list
+    n = len(atom_list)
+    radius_list = molecule.get_radius_list()
+    radius_matrix_flatten = np.repeat(radius_list,n)
+    radius_matrix = radius_matrix_flatten.reshape((n,n))
+    radius_matrix_transpose = np.transpose(radius_matrix)
+    criteria_matrix = coeff * (radius_matrix + radius_matrix_transpose)
+    coordinate_list = molecule.get_coordinate_list()
+    distance_matrix = spatial.distance_matrix(coordinate_list,coordinate_list)
+    adj = np.where(distance_matrix<criteria_matrix,1,0)
     np.fill_diagonal(adj,0)
-    # Here, consider additional condition
-    max_valency_list = molecule.get_max_valency_list()
-    valency_list = np.sum(adj,axis=1)
-    over_octet_indices = np.where(valency_list>max_valency_list)[0].tolist()
-    # Remove bond with maximum ratio for overoctet indices that is bonded ...
-    while len(over_octet_indices) > 0:
-        index = over_octet_indices[0]
-        removing_index = np.argmax(ratio_matrix[index])
-        adj[index][removing_index] -= 1 # Remove bond
-        adj[removing_index][index] -= 1
-        ratio_matrix[index][removing_index] = 0 # To label that bond is removed 
-        ratio_matrix[removing_index][index] = 0
-        valency_list = np.sum(adj,axis = 1)
-        over_octet_indices = np.where(valency_list>max_valency_list)[0].tolist() 
     return adj 
 
 def get_bo_matrix_from_adj_matrix(molecule,chg=None,method='SumofFragments',obtain_all_resonance = False):

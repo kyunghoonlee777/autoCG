@@ -25,7 +25,7 @@ from autoCG.Calculator import orca
 
 class GuessGenerator:
     
-    def __init__(self,calculator=None,ts_scale=1.33,form_scale = 1.2,break_scale=1.6,step_size=0.15,qc_step_size=0.2):
+    def __init__(self,calculator=None,ts_scale=1.33,form_scale = 1.2,break_scale=1.8,step_size=0.15,qc_step_size=0.2):
         self.ts_scale = ts_scale
         self.form_scale = form_scale
         self.break_scale = break_scale

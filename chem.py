@@ -360,6 +360,8 @@ class Atom:
             return 1
         elif a=='na': 
             return 1
+        elif a == 'mg':
+            return 2
         elif a=='co':
             return 6
         elif a=='rh':
@@ -370,7 +372,7 @@ class Atom:
             return 6
         elif a=='fe':
             return 6
-        elif a=='cl': 
+        Elif a=='cl': 
             return 1
         elif a=='br': 
             return 1
@@ -1388,7 +1390,7 @@ class Molecule:
         n = len(self.atom_list)
         if library == 'rdkit':
             params = Chem.rdDistGeom.srETKDGv3()
-            params.pruneRmsThresh = 0.25
+            #params.pruneRmsThresh = 0.25
             try:
                 mol = self.get_rd_mol()
                 Chem.SanitizeMol(mol)
@@ -1432,7 +1434,7 @@ class Molecule:
                 ob_mol = virtual_molecule.get_ob_mol()
                 use_ic_update = True
             pybel_mol = pybel.Molecule(ob_mol)
-            for i in range(num_conforomer):
+            for i in range(num_conformer):
                 coordinate_list = []
                 pybel_mol.make3D()
                 pybel_mol.localopt('uff',1000)
@@ -1443,6 +1445,7 @@ class Molecule:
                     coordinate_list.append((position[0],position[1],position[2]))
                     #print (atom.atomicnum,position[0],position[1],position[2])
                 if len(coordinate_list) > 0:
+                    coordinate_list = np.array(coordinate_list)
                     coordinates.append(coordinate_list)
         else:
             print ('Give us algorithm for generating 3D!!!')
