@@ -1,5 +1,5 @@
-from acerxn import chem
-from acerxn import process
+from autoCG import chem
+from autoCG.utils import process
 
 import numpy as np
 

@@ -25,24 +25,19 @@ from autoCG.Calculator import orca
 
 class GuessGenerator:
     
-    def __init__(self,calculator=None,ts_scale=1.33,form_scale = 1.2,break_scale=1.8,step_size=0.15,qc_step_size=0.2):
+    def __init__(self,calculator=None,ts_scale=1.33,form_scale = 1.2,break_scale=1.8,step_size=0.15,qc_step_size=0.2,num_relaxation=3):
         self.ts_scale = ts_scale
         self.form_scale = form_scale
         self.break_scale = break_scale
-        self.step_size = 0.1
+        self.step_size = step_size
         self.qc_step_size = qc_step_size
         self.num_step = 30 # May not change ... 
         self.use_gurobi = True
         self.num_conformer = 1
-        self.num_relaxation = 3
-        unit_converter = 627.5095
-        self.d_criteria = 0.005
-        self.rmsd_criteria = 0.1
-        self.energy_criteria = 10.0/unit_converter # 10.0 kcal/mol
+        self.num_relaxation = num_relaxation
+        self.unit_converter = 627.5095
+        self.energy_criteria = 10.0/self.unit_converter # 10.0 kcal/mol
         self.library = 'rdkit'
-        self.scale = 1.0 # Scale for quantum calculations, if too small, can't make good molecule ...
-        self.ratio = 0.2
-        self.c = 0.3
         self.save_directory = None
         # Check calculator
         if calculator is None: # Default as Gaussian
@@ -58,30 +53,6 @@ class GuessGenerator:
                 calculator.change_working_directory(os.getcwd()) # Use the final working directory (may be save_directory) as default working directory, it's safe!
         self.calculator = calculator
 
-    def change_save_directory(self,save_directory):
-        if not os.path.exists(save_directory):
-            os.system(f'mkdir {save_directory}')
-            if not os.path.exists(save_directory):
-                print ('Directory not found! Cannot change save directory!')
-            else:
-                self.save_directory = save_directory
-        else:
-            self.save_directory = save_directory
-
-    def change_working_directory(self,working_directory):
-        if self.calculator is not None:
-            self.calculator.change_working_directory(working_directory)
-        else:
-            print ('Calculator does not exist!!! Define a calcualtor first!')
-
-    def write_log(self,content,mode='a',file_name='guess'):
-        if self.save_directory is None:
-            #print ('No log directory!!! Need to give log directory!!!')
-            return
-        log_directory = os.path.join(self.save_directory,f'{file_name}.log')
-        with open(log_directory,mode) as f:
-            f.write(content)
-            f.flush()
 
     def read_option(self,input_directory):
         if not os.path.exists(input_directory):
@@ -137,6 +108,7 @@ class GuessGenerator:
                     print("Cannot read the number of optimization for guess generation!!")             
         fd.close()
 
+
     def read_qc_input(self,input_directory,file_name='qc_input'):
         qc_directory = os.path.join(input_directory,file_name)
         if os.path.exists(qc_directory):
@@ -149,6 +121,35 @@ class GuessGenerator:
         else:
             self.write_log(f'Input template for quantum calculation is not found! Path will be found with default parameters!\n\n')
 
+
+    def change_save_directory(self,save_directory):
+        if not os.path.exists(save_directory):
+            os.system(f'mkdir {save_directory}')
+            if not os.path.exists(save_directory):
+                print ('Directory not found! Cannot change save directory!')
+            else:
+                self.save_directory = save_directory
+        else:
+            self.save_directory = save_directory
+
+    def change_working_directory(self,working_directory):
+        if self.calculator is not None:
+            self.calculator.change_working_directory(working_directory)
+        else:
+            print ('Calculator does not exist!!! Define a calcualtor first!')
+
+    def set_energy_criteria(self,criteria):
+        self.energy_criteria = criteria/self.unit_converter
+
+
+    def write_log(self,content,mode='a',file_name='guess'):
+        if self.save_directory is None:
+            #print ('No log directory!!! Need to give log directory!!!')
+            return
+        log_directory = os.path.join(self.save_directory,f'{file_name}.log')
+        with open(log_directory,mode) as f:
+            f.write(content)
+            f.flush()
 
     def get_geometry(self,molecule):
         content = ''
@@ -171,6 +172,18 @@ class GuessGenerator:
                     f.write('0 1\n')
             f.write(content + '\n')
             f.flush()
+
+    def write_optimization(self,molecule,file_name=None,mode='a'):
+        if self.save_directory is None:
+            return
+        if file_name is None:
+            return 
+        content = self.get_geometry(molecule)
+        with open(os.path.join(self.save_directory,file_name),mode) as f:
+            f.write(f'{len(molecule.atom_list)}\n\n')
+            f.write(content)
+            f.flush()
+
 
     def save_geometries(self,molecules,name='test',extension='xyz'):
         for i, molecule in enumerate(molecules):
@@ -283,7 +296,7 @@ class GuessGenerator:
         ts_molecules = ts_molecule.sample_conformers(self.num_conformer,library=self.library)
         return ts_molecules # constraint_info for ts_molecule, mapping_info: intermediate to ts_molecule (reduced_idx)
 
-    def move_to_reactant(self,molecule,formed_bonds,broken_bonds):
+    def move_to_reactant(self,molecule,formed_bonds,broken_bonds,file_name=None):
         step_size = self.step_size
         coordinate_list = molecule.get_coordinate_list()
         n = len(molecule.atom_list)
@@ -295,6 +308,7 @@ class GuessGenerator:
         update_q = dict()
         check_increase = False
         undesired_bonds = []
+        self.write_optimization(molecule,file_name,'w')
         for i in range(self.num_step):
             update_q = dict()
             for bond in total_bonds:
@@ -324,41 +338,25 @@ class GuessGenerator:
             if update < 0.0001: # If nothing to update ...
                 print ('No more coordinate to update ...')
                 break
-            print (f'{i+1}th geometry ...')
-            molecule.print_coordinate_list()
+            #print (f'{i+1}th geometry ...')
+            #molecule.print_coordinate_list()
             converged = ic.update_geometry(molecule,update_q)
-            #self.calculator.relax_geometry(molecule,updated_bonds,chg,multiplicity,'test',self.num_relaxation,step_size*self.scale,False)
             if n*(n-1)/2>len(update_q):
                 self.calculator.relax_geometry(molecule,update_q,None,None,'test',self.num_relaxation,self.step_size)
+            self.write_optimization(molecule,file_name,'a')
 
 
-    def relax_geometry(self,reactant,constraints):
+    def relax_geometry(self,reactant,constraints,file_name=None):
         energy_list = [self.calculator.get_energy(reactant)]
+        self.write_optimization(reactant,file_name,'w')
         for i in range(self.num_step):
             self.calculator.relax_geometry(reactant,constraints,None,None,'test',self.num_relaxation,self.qc_step_size)
+            self.write_optimization(reactant,file_name,'a')
             energy_list.append(reactant.energy)
             if energy_list[-1] - energy_list[-2] > -self.energy_criteria:
                 break
         #print ('#### Optimized geometry ####')
         #reactant.print_coordinate_list()    
-
-    def optimize_reactant(self,reactant,formed_bonds = [],num_relaxation=5):
-        bond_list = reactant.get_bond_list(False)
-        constraints = bond_list + formed_bonds
-        groups = process.group_molecules(reactant.adj_matrix)
-        previous_distance_matrix = reactant.get_distance_matrix('spatial')
-        n = len(groups)
-        previous_molecules = []
-        energy_list = [self.calculator.get_energy(reactant)]
-        atom_list = reactant.atom_list
-        for i in range(self.num_step):
-            print (f'{i+1}th orientation optimization, {num_relaxation} steps per optimization')
-            self.calculator.relax_geometry(reactant,[],None,None,'orient',num_relaxation,self.qc_step_size) # Mini optimization
-            energy_list.append(reactant.energy)
-
-        #reactant.print_coordinate_list()
-        print ('#### orientation optimization geometry ####')
-        reactant.print_coordinate_list()
 
 
     def get_oriented_RPs(self,reactant,product,reaction_info=None,chg=None,multiplicity=None,save_directory=None):
@@ -381,13 +379,20 @@ class GuessGenerator:
 
         starttime = datetime.datetime.now()
         self.write_log(f'##### Guess generator info #####\n','w')
-        self.write_log(f'scale (for qc): {self.scale}\n')
+        # Parameter directly related to precomplexes
+        self.write_log(f'library: {self.library}\n')
         self.write_log(f'ts_scale: {self.ts_scale}\n')
         self.write_log(f'form_scale: {self.form_scale}\n')
         self.write_log(f'broken_scale: {self.break_scale}\n')
-        self.write_log(f'step_size: {self.step_size}\n')
         self.write_log(f'num_conformer: {self.num_conformer}\n')
-        self.write_log(f'num_relaxation: {self.num_relaxation}\n\n')
+        self.write_log(f'E_criteria(Delta E) = {self.energy_criteria * self.unit_converter}kcal/mol\n')
+
+        # Fine tuning parameters for delicate generation
+        self.write_log(f'step_size (change in coordinates for bond participating coordinates): {self.step_size}\n')
+        self.write_log(f'Maximal displacement change: {self.qc_step_size}\n')
+        self.write_log(f'num_relaxation: {self.num_relaxation}\n')
+        self.write_log(f'Calculator: {self.calculator.command}\n\n')
+
         self.write_log(f'Starting time: {starttime}\n\n')
         self.write_log(f'All guesses will be saved in {self.save_directory}\n')
 
@@ -541,7 +546,7 @@ class GuessGenerator:
                 product_molecules.multiplicity = multiplicity
             self.write_log(f'{i+1}th structure moving to R ...\n',file_name=name)
             #print ('moving to R ...')
-            self.move_to_reactant(reactant_molecules,broken_bonds,formed_bonds) # New module for finding reactant complex
+            self.move_to_reactant(reactant_molecules,broken_bonds,formed_bonds,'TS_to_R.xyz') # New module for finding reactant complex
             undesired_bonds = []
             #print ('R geometry ...')
             #reactant_molecules.print_coordinate_list()
@@ -551,9 +556,8 @@ class GuessGenerator:
                 reactant_molecules.adj_matrix[start][end] -= 1
                 reactant_molecules.adj_matrix[end][start] -= 1
             print ('###### R optimization #####')
-            self.relax_geometry(reactant_molecules,[])
+            self.relax_geometry(reactant_molecules,[],'opt_R.xyz')
             print ('R optimization finished !!!')
-            #self.optimize_reactant(reactant_molecules,formed_bonds,num_relaxation=3)
             #reactant_molecules.print_coordinate_list()
             self.write_geometry(reactant_molecules,'R','xyz')
             self.write_geometry(reactant_molecules,'R','com')
@@ -561,7 +565,7 @@ class GuessGenerator:
             self.calculator.clean_scratch()
             #print ('moving to P ...')
             #print (formed_bonds,broken_bonds)
-            self.move_to_reactant(product_molecules,formed_bonds,broken_bonds)
+            self.move_to_reactant(product_molecules,formed_bonds,broken_bonds,'TS_to_P.xyz')
             #self.calculator.optimize_geometry(molecule=product_molecules,constraints=reaction_info['b'],chg=chg,multiplicity=multiplicity,file_name='product',extra='(modredundant,maxcycles=10) Symmetry=None')
             #'''
             undesired_bonds = []
@@ -573,9 +577,8 @@ class GuessGenerator:
                 product_molecules.adj_matrix[end][start] -= 1
             print ('###### P optimization #####')
             #self.separated_reactant_optimization(product_molecules,
-            self.relax_geometry(product_molecules,[])
+            self.relax_geometry(product_molecules,[],'opt_P.xyz')
             print ('P optimization finished !!!')
-            #self.optimize_reactant(product_molecules,broken_bonds,num_relaxation=3)
             self.write_geometry(product_molecules,'P','xyz')
             self.write_geometry(product_molecules,'P','com')
 
@@ -686,11 +689,19 @@ class GuessGenerator:
 if __name__ == '__main__':        
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--save_directory','-sd',type=str,help='save directory for precomplex',default=None)
     parser.add_argument('--input','-i',type=str,help='Input directory for reaction')
+    parser.add_argument('--save_directory','-sd',type=str,help='save directory for precomplex',default=None)
     parser.add_argument('--library','-l',type=str,help='Library for generating conformers of rough TS guess',default='rdkit')
     parser.add_argument('--calculator','-ca',type=str,help='Using calculator for constraint optimization',default='orca')
-    parser.add_argument('--num_conformer','-n',type=int,help='Number of precomplex conformations',default=1)
+    parser.add_argument('--num_conformer','-nc',type=int,help='Number of precomplex conformations',default=1)
+    parser.add_argument('--num_relaxation','-nr',type=int,help='Number of relaxation during each scan',default=3)
+    parser.add_argument('--ts_scale','-ts',type=float,help='Scaling factor for bonds participating reactions',default=1.33)
+    parser.add_argument('--form_scale','-fs',type=float,help='Scaling factor for bond formation',default=1.2)
+    parser.add_argument('--break_scale','-bs',type=float,help='Scaling factor for bond dissociation',default=1.8)
+    parser.add_argument('--step_size','-s',type=float,help='Step size for constraint optimization',default=0.15)
+    parser.add_argument('--qc_step_size','-qc',type=float,help='Maximal displacement change during QC calculation',default=0.25)
+    parser.add_argument('--energy_criteria','-ec',type=float,help='Energy criteria for precomplex optimization',default=10.0)
+
 
     args = parser.parse_args()
     save_directory = args.save_directory
@@ -699,14 +710,15 @@ if __name__ == '__main__':
         input_directory = args.input
         names = input_directory.split('/')
         save_directory = '/'.join(names[:-1])
-    generator = GuessGenerator()
-    generator.library = args.library
     if args.calculator == 'gaussian':
         calculator = gaussian.Gaussian()
     else:
         calculator = orca.Orca()
-    generator.calculator = calculator
+    generator = GuessGenerator(calculator,args.ts_scale,args.form_scale,args.break_scale,args.step_size,args.qc_step_size,args.num_relaxation)
+    generator.library = args.library
     generator.num_conformer = args.num_conformer
+    generator.set_energy_criteria(args.energy_criteria)
+
     if '>>' in args.input:
         RP_pairs,reaction_info,mapping_info,matching_results = generator.get_oriented_RPs_from_smiles(args.input,save_directory=save_directory) 
     else:

@@ -14,8 +14,8 @@ import numpy as np
 import cclib
 
 ### ace-reaction libraries ###
-from acerxn import chem
-from acerxn import process
+from autoCG import chem
+from autoCG import process
 
 '''
 You can define your own calculator, depending on your using software!!!

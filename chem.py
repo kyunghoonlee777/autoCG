@@ -9,10 +9,8 @@ from scipy import spatial
 import numpy as np
 import itertools
 
-from acerxn.utils import make_smiles
-from acerxn.utils import ic
-
-from acerxn import process
+from autoCG.utils import ic
+from autoCG.utils import process
 
 
 class Atom:
@@ -372,7 +370,7 @@ class Atom:
             return 6
         elif a=='fe':
             return 6
-        Elif a=='cl': 
+        elif a=='cl': 
             return 1
         elif a=='br': 
             return 1
@@ -1246,10 +1244,10 @@ class Molecule:
         z_list = self.get_z_list()
         new_z_list = np.copy(z_list)
         new_chg_list = np.copy(chg_list)
-        print ('z',z_list)
-        print ('chg',new_chg_list)
-        print ('sn',sn_list)
-        print ('l',lone_pair_list)
+        #print ('z',z_list)
+        #print ('chg',new_chg_list)
+        #print ('sn',sn_list)
+        #print ('l',lone_pair_list)
         for i in range(n):
             # First change charge
             if lone_pair_list[i] < 0:
@@ -1272,101 +1270,6 @@ class Molecule:
         virtual_molecule = Molecule((new_z_list,None,bo_matrix,new_chg_list))
         return virtual_molecule
 
-    '''
-    def get_valid_molecule(self): # Function for generating 3D geometry of unstable molecules
-        adj_matrix = self.get_matrix('adj')
-        valency_list = np.sum(adj_matrix,axis=1)
-        group_list = self.get_group_list()
-        new_chg_list = np.copy(self.get_chg_list())
-        new_z_list = np.copy(self.get_z_list())
-        n = len(new_z_list)
-        # Replace atoms by using valency 
-        period_list,group_list = self.get_period_group_list()
-        add_z_list = [0,2,10,28,46] # 1, 2, 3, 4, 5
-        e_list = self.get_num_of_lone_pair_list()
-        if e_list is None:
-            e_list = [1] * n
-        for i in range(n):
-            if valency_list[i] == 1:
-                if period_list[i] == 1:
-                    new_z_list[i] = 1 # Use H
-                elif period_list[i] == 2:
-                    new_z_list[i] = 9 # Use F
-                elif period_list[i] == 3:
-                    new_z_list[i] = 17 # Use Cl
-                elif period_list[i] == 4:
-                    new_z_list[i] = 35 # Use Br
-                else:
-                    new_z_list[i] = 53 # Use I
-            elif valency_list[i] == 2:
-                if period_list[i] < 3:
-                    if group_list[i] > 4:
-                        new_z_list[i] = 8 # Use O
-                    else:
-                        #new_z_list[i] = 4
-                        new_z_list[i] = 8
-                elif period_list[i] > 2:
-                    if group_list[i] > 4:
-                        new_z_list[i] = 16 # Use S
-                    else:
-                        new_z_list[i] = 12
-            elif valency_list[i] == 3:
-                if period_list[i] < 3:
-                    if group_list[i] > 5:
-                        new_z_list[i] = 7 # Use N
-                    else:
-                        new_z_list[i] = 5
-                elif period_list[i] > 2:
-                    if group_list[i] > 5:
-                        new_z_list[i] = 15 # Use P
-                    else:
-                        new_z_list[i] = 13
-            elif valency_list[i] == 4:
-                if period_list[i] == 2:
-                    new_z_list[i] = 6 # Use C
-                elif period_list[i] > 2:
-                    new_z_list[i] = 14 # Use Si
-            elif valency_list[i] == 5:
-                new_z_list[i] = 15 # Just use P
-            elif valency_list[i] == 6:
-               new_z_list[i] = 16 # Just use S
-        print (new_z_list)
-        virtual_molecule = Molecule((new_z_list,None,adj_matrix,np.zeros((n))))
-        return virtual_molecule
-        # (TODO): Need to come up with better replacements
-        for i in range(n):
-            period = period_list[i]
-            group = group_list[i]
-            valency = valency_list[i] 
-            num_electron = int(e_list[i])
-            steric_number = num_electron + valency
-            if valency == 1:
-                if period == 1:
-                    new_z_list[i] = 1 # Use H
-                else: 
-                    new_z_list[i] = add_z_list[period-1] + 7 # Use halogen
-            elif valency == 2:
-                if period == 1:
-                    new_z_list[i] = 8 # Replace O for hydrogen case
-                elif num_electron < 1:
-                    new_z_list[i] = add_z_list[period-1] + 2 # Use 2th group elements
-                else:
-                    new_z_list[i] = add_z_list[period-1] + 6 # Use O, X, Se, Te
-            elif valency == 3:
-                if num_electron < 1:
-                    new_z_list[i] = add_z_list[period-1] + 3 # Use B, Al, ...
-                else:
-                    new_z_list[i] = add_z_list[period-1] + 5 # Use N, P, ...
-            elif valency == 4:
-                new_z_list[i] = add_z_list[period-1] + 4 # Use C, Si, ...
-            elif valency == 5:
-                new_z_list[i] = 15 # Just use P. Normally, it works well
-            elif valency == 6:
-               new_z_list[i] = 16 # Just use S. Normally, it works well
-        virtual_molecule = Molecule((new_z_list,None,adj_matrix,np.zeros((n))))
-        return virtual_molecule
-        '''
-    # bookmark -jw
 
     def make_3d_coordinate(self,library='rdkit'):
         return self.make_3d_coordinates(1,library)[0]
@@ -1459,10 +1362,6 @@ class Molecule:
         # Repermute coordinates
         for i in range(len(coordinates)):
             coordinate_list = coordinates[i]
-            if not process.check_geometry(coordinate_list):
-                #print ('what? Wrong conformer!!!', permutation)
-                for j in range(n):
-                    print (self.atom_list[j].get_element(), coordinate_list[j][0],coordinate_list[j][1],coordinate_list[j][2])
             if use_ic_update:
                 internal_coordinates = self.get_bond_list(False)
                 q_updates = dict()
@@ -1483,7 +1382,6 @@ class Molecule:
         from rdkit import Chem
         conformer_list = []
         coordinates = self.make_3d_coordinates(n_conformer,library)
-        #print (len(coordinates),'adfsdf')
         for coordinate_list in coordinates:
             ace_mol = Molecule((self.get_z_list(),self.get_adj_matrix(),None,self.get_chg_list()))
             process.locate_molecule(ace_mol,coordinate_list)
@@ -1491,7 +1389,6 @@ class Molecule:
             put_in = True
             for i,conformer in enumerate(conformer_list):
                 rmsd = process.get_rmsd(conformer,ace_mol)
-                #print (i,rmsd)
                 if rmsd < rmsd_criteria:
                     put_in = False
                     break

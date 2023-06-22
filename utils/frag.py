@@ -16,11 +16,8 @@ import numpy as np
 
 from scipy import spatial
 
-from acerxn.utils import xyztoDFTB
-from acerxn.utils import am
-from acerxn.utils import make_smiles
-
-from acerxn import chem
+from autoCG.utils import am
+from autoCG import chem
 
 visit=[] 
 visited_V=[]
@@ -682,6 +679,31 @@ def getunsatuatom_list(FragAdj,Elemlist,reactive_atoms,UserDefinedMaxV):
 
 
     return unsatuatom_list, unsatuDSD, Fragnum, Zlist
+
+def Find_Neighbors(Adj,vertex,unsatu_set):
+    """ It finds neighboring unsaturated atoms of the given atom. 
+    It is used in generating bond order matrix from adjacency matrix.
+
+    Adj - adjacency matrix
+    vertex - index of the current atom of which neighboring atoms will be investigated
+    unsatu_set - set of atom indices of unsaturated atoms
+    
+    returns:
+        num_neighbors - number of neighboring atoms
+        neighbors - list of indices of neighboring atoms
+    """
+    num_neighbors=0
+    neighbors=[]
+    for i in range(len(unsatu_set)):
+        vertex2=unsatu_set[i]
+        if Adj[vertex][vertex2]!=0: 
+            num_neighbors+=1
+            neighbors.append(vertex2)
+
+    return num_neighbors,neighbors
+
+
+
 
 def permuteBO(BO,atom_labels):
     """ It permutes atom indices of the bond order matrix, so that it matches with those of 3D geometry generated from SMILES.

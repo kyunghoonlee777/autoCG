@@ -12,7 +12,7 @@ import distutils.spawn
 import numpy as np
 
 ### ace-reaction libraries ###
-from acerxn import process
+from autoCG.utils import process
 
 '''
 You can define your own calculator, depending on your using software!!!

@@ -13,11 +13,10 @@ import distutils.spawn
 
 ### Module for reading gaussian files ###
 import cclib
-from iodata import load_one
 
 ### ace-reaction libraries ###
-from acerxn import chem
-from acerxn import process
+from autoCG import chem
+from autoCG.utils import process
 
 
 class Gaussian:
@@ -285,27 +284,6 @@ class Gaussian:
         os.chdir(current_directory)
         return data.grads[-1]
 
-    def get_hessian(self,molecule,chg=None,multiplicity=None,file_name='hessian',extra=' Symmetry = None',save_directory=None):
-        current_directory = os.getcwd()
-        os.chdir(self.working_directory)
-        original_content = self.content
-        if 'chk' not in self.content:
-            self.content = '%chk=hessian.chk\n' + self.content
-        if 'freq' not in extra:
-            extra = ' freq ' + extra
-        self.make_input([molecule],chg,multiplicity,file_name=file_name,extra=extra)
-        os.system(f'{self.command} {file_name}.com')
-        os.system('formchk hessian.chk')
-        # Read output
-        tmp_mol = load_one('hessian.fchk')
-        grads = tmp_mol.atgradient
-        hessian = tmp_mol.athessian
-
-        self.move_file(file_name,save_directory)
-        #os.system('mv new.chk old.chk')
-        os.chdir(current_directory)
-        self.content = original_content
-        return grads,hessian
 
     def optimize_geometry(self,molecule,constraints={},chg=None,multiplicity=None,file_name='test',extra='',save_directory=None):
         current_directory = os.getcwd()

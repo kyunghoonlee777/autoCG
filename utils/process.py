@@ -5,7 +5,6 @@ Generate 2D graph molecule in ACE-Reaction format from xyz files or SMILES
 """
 
 import os 
-import subprocess
 import copy
 import numpy as np 
 import random
@@ -15,6 +14,8 @@ from rdkit import Chem
 from autoCG import chem
 
 from autoCG.utils import frag
+from scipy import spatial
+
 
 def locate_molecule(ace_molecule,coordinate_list,update = False):
     """ Locates atoms according to coordinate_list, be cautious on ordering of atoms
