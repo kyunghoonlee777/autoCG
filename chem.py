@@ -1385,16 +1385,8 @@ class Molecule:
         for coordinate_list in coordinates:
             ace_mol = Molecule((self.get_z_list(),self.get_adj_matrix(),None,self.get_chg_list()))
             process.locate_molecule(ace_mol,coordinate_list)
-            # Check RMSD between conformers
-            put_in = True
-            for i,conformer in enumerate(conformer_list):
-                rmsd = process.get_rmsd(conformer,ace_mol)
-                if rmsd < rmsd_criteria:
-                    put_in = False
-                    break
-            if put_in:
-                ace_mol.chg = self.get_chg()
-                conformer_list.append(ace_mol)
+            ace_mol.chg = self.get_chg()
+            conformer_list.append(ace_mol)
         return conformer_list
 
     def write_geometry(self,file_directory, option='element',criteria = 1e-4):

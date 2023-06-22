@@ -701,6 +701,8 @@ if __name__ == '__main__':
     parser.add_argument('--step_size','-s',type=float,help='Step size for constraint optimization',default=0.15)
     parser.add_argument('--qc_step_size','-qc',type=float,help='Maximal displacement change during QC calculation',default=0.25)
     parser.add_argument('--energy_criteria','-ec',type=float,help='Energy criteria for precomplex optimization',default=10.0)
+    parser.add_argument('--chg',type=int,help='Total charge of the system',default=0)
+    parser.add_argument('--mult',type=int,help='Total multiplicity of the system',default=1)
 
 
     args = parser.parse_args()
