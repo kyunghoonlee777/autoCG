@@ -53,7 +53,6 @@ class GuessGenerator:
                 calculator.change_working_directory(os.getcwd()) # Use the final working directory (may be save_directory) as default working directory, it's safe!
         self.calculator = calculator
 
-
     def read_option(self,input_directory):
         if not os.path.exists(input_directory):
             print ('No inputs are found!!!')
@@ -179,8 +178,10 @@ class GuessGenerator:
         if file_name is None:
             return 
         content = self.get_geometry(molecule)
+        e = molecule.get_energy()
         with open(os.path.join(self.save_directory,file_name),mode) as f:
-            f.write(f'{len(molecule.atom_list)}\n\n')
+            f.write(f'{len(molecule.atom_list)}\n')
+            f.write(f'{e}\n')
             f.write(content)
             f.flush()
 
