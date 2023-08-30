@@ -336,6 +336,8 @@ class Atom:
         a = str.lower(element)
         if a=='c':   
             return 4
+        elif a=='si':
+            return 4
         elif a=='h': 
             return 1
         elif a=='b': 
@@ -1091,6 +1093,7 @@ class Molecule:
         rd_mol = Chem.Mol()
         rde_mol = Chem.EditableMol(rd_mol)
         atom_list = self.atom_list
+        #print("atom_list:", list(map(lambda x: x.get_element(), self.atom_list)))
         atom_feature = self.atom_feature
         chg_list = self.get_chg_list()
         #if chg_list is None:
@@ -1105,10 +1108,11 @@ class Molecule:
             rde_mol.AddAtom(rd_atom)
         # Add bonds
         bond_list = self.get_bond_list(True)
-        for bond in bond_list: 
+        for bond in bond_list:
             if bond[0] < bond[1]:
                 rde_mol.AddBond(bond[0],bond[1],bond_types[bond[2]])
-        rd_mol = rde_mol.GetMol() 
+        rd_mol = rde_mol.GetMol()
+
         return rd_mol
 
     def get_ob_mol(self,include_stereo=False):
@@ -1226,48 +1230,123 @@ class Molecule:
             print (element, print_x,print_y,print_z)
 
     def get_valid_molecule(self):
-        bo_matrix = self.get_matrix('bo')
-        chg_list = self.get_chg_list()
+        #bo_matrix = self.get_matrix('bo')
+        #chg_list = self.get_chg_list()
+        z_list = self.get_z_list()
+        n = len(z_list)
+        virtual_chg = 0 if self.chg is None else self.chg
+        """
         if bo_matrix is None:
             chg = self.chg
             if chg is None:
                 chg = 0
             bo_matrix = process.get_bo_matrix_from_adj_matrix(self,chg)
             chg_list = process.get_chg_list_from_bo_matrix(self,chg,bo_matrix)
-        period_list,group_list = self.get_period_group_list()
-        n = len(chg_list)
-        adj_matrix = np.where(bo_matrix>0,1,0)
-        # Compute SN
-        lone_pair_list = (group_list - np.sum(bo_matrix,axis=1) - chg_list)/2
-        lone_pair_list = np.where(lone_pair_list>0,lone_pair_list,0)
-        sn_list = lone_pair_list + np.sum(adj_matrix,axis=1)
-        z_list = self.get_z_list()
+        """
+        #n = len(chg_list)
+        period_list, group_list = self.get_period_group_list()
+        adj_matrix = self.get_adj_matrix()
+        adjacency_list = np.sum(adj_matrix, axis=0)
+        #adj_matrix = np.where(bo_matrix>0,1,0)
+        #total_bo_list = np.sum(bo_matrix,axis=1)
+        
+        #Compute SN
+        #lone_pair_list = (group_list - total_bo_list - chg_list)/2
+        #lone_pair_list = np.where(lone_pair_list>0,lone_pair_list,0)
+        #problem_indices = np.where(lone_pair_list<0)[0].tolist()
+        problem_indices = np.flatnonzero(adjacency_list > self.get_max_valency_list())
+        print("z_list", z_list)
+        print("problem_indices", problem_indices)
         new_z_list = np.copy(z_list)
-        new_chg_list = np.copy(chg_list)
-        #print ('z',z_list)
-        #print ('chg',new_chg_list)
-        #print ('sn',sn_list)
-        #print ('l',lone_pair_list)
+
+        for idx in problem_indices:
+            period = period_list[idx]
+            group = group_list[idx]
+            adj = adjacency_list[idx]
+
+            if period < 4 and adj == 3:
+                new_z_list[idx] = 5       
+                                    #for deficient octet, 
+                                    #replacing with Boron would be enough
+            elif period == 1:       
+                if adj > 1: #Case of hydrogen overvalence
+                    new_z_list[idx] = 8 #replace with Oxygen
+            elif period == 2:
+                if adj == 1:
+                    new_z_list[idx] = 9 #replace with Fluorine
+                elif adj == 2:
+                    new_z_list[idx] = 8 #replace with Oxygen
+                else:
+                    new_z_list[idx] = 10 + adj #replace with one higher period element with proper valency
+            else:
+                new_z_list[idx] = z_list[idx] - group + adj #replace with the same period element with proper valency
+
+        #Construct new Molecule
+        virtual_molecule = Molecule([new_z_list, adj_matrix, None, None])
+
+        #num of electron parity conservation!
+        #unless, unreplaced atoms might get 
+        #absurd formal charges at the next step
+        if np.sum(z_list)%2 != np.sum(new_z_list)%2:
+            print("#### parity compensation applied #### ")
+            print(f"# of e: before\t{np.sum(z_list)}, after\t{np.sum(new_z_list)}")
+            virtual_chg -= 1
+
+        #Construct BO and Chg
+        new_bo_matrix = process.get_bo_matrix_from_adj_matrix(virtual_molecule, virtual_chg)
+        new_bo_sum = np.sum(new_bo_matrix, axis=0)
+
+        #chg does not have to exact. chg list which would not give error in rdkit is enough
+        new_period_list, new_group_list = virtual_molecule.get_period_group_list()
+        new_chg_list = np.zeros(n)
         for i in range(n):
-            # First change charge
-            if lone_pair_list[i] < 0:
-                pass 
+            g = new_group_list[i]
+            b = new_bo_sum[i]
+            if new_period_list[i] == 2:
+                new_chg_list[i] = max(0, g + b - 2*min(g, 4))
+            else:
+                new_chg_list[i] = max(0, b-g)
+
+
+        
+        #new_chg_list = process.get_chg_list_from_bo_matrix(virtual_molecule, virtual_chg, new_bo_matrix)
+        print("new_bo_matrix:\n", new_bo_matrix)
+        print("new_chg:\n", new_chg_list)
+        
+        """
+        #Handle radicals
+        #LHS: num of valence electrons % 2
+        #if num of valence electrons is odd number, then give additional negative charge,
+        #for not making radical (to avoid any possible side-effects)
+        for idx in np.flatnonzero((new_group_list - new_chg_list - new_bo_sum)%2 == 1):
+            if new_period_list[idx] == 2 and new_group_list[idx] == 3: 
+                new_chg_list[idx] += 1 #Exception for Nitrogen
+                                       #Nitrogen is only allowed for 3 valency at most.
+                                       #So positive charge is given
+            else:
+                new_chg_list[idx] -= 1
+            new_chg_list[idx] -= 1
+
+        """
+
+        virtual_molecule.set_bo_matrix(new_bo_matrix)
+        virtual_molecule.atom_feature['chg'] = new_chg_list
+
+        """
             if period_list[i] == 1: # Case of hydrogen overvalence
                 if sn_list[i] > 1:
                     new_z_list[i] = 8
                     new_chg_list[i] = 0
-            elif period_list[i] == 2:
-                if sn_list[i] > 3 and sn_list[i] <= 4:
-                    new_z_list[i] = 6 # C
-                    new_chg_list[i] = 0
-                if sn_list[i] > 4 and sn_list[i] <= 5:
-                    new_z_list[i] = 15 # P
-                    new_chg_list[i] = 0
-                elif sn_list[i] >= 5:
-                    new_z_list[i] = 16 # S
-                    new_chg_list[i] = 0
+            else:
+                new_chg_list[i] = 0
+                new_z_list[i] = sn_list[i] + 10
+                #new_z_list[i] = total_bo_list[i] + 10 + (total_bo_list[i] + chg_list[i] + z_list[i])%2
+        """
         #print (new_z_list,new_chg_list,sn_list,bo_matrix)
-        virtual_molecule = Molecule((new_z_list,None,bo_matrix,new_chg_list))
+        #print ('new z',new_z_list)
+        #print ('new chg',new_chg_list)
+        #virtual_molecule = Molecule((new_z_list,None,bo_matrix,new_chg_list))
+        
         return virtual_molecule
 
 
@@ -1303,19 +1382,27 @@ class Molecule:
                 mol = virtual_molecule.get_rd_mol()
                 Chem.SanitizeMol(mol)
                 mol = Chem.AddHs(mol)
+                print("in making 3d coord", Chem.MolToSmiles(mol))
                 use_ic_update = True
             if mol is None:
                 print ('Impossible embedding')
                 return []
-            #print (Chem.MolToSmiles(mol))
+            print("SMILES for Hypothetical TS:\t", Chem.MolToSmiles(mol))
             conformer_id_list = AllChem.EmbedMultipleConfs(mol, num_conformer, params)
             #print (conformer_id_list)
             conformer_energy_list = dict()
+            converged_conformer_id_list = []
             for conformer_id in conformer_id_list:
-                converged = not AllChem.UFFOptimizeMolecule(mol,confId=conformer_id)
+                converged = not AllChem.UFFOptimizeMolecule(mol, confId=conformer_id)
+                if converged: converged_conformer_id_list.append(conformer_id)
+                print(conformer_id, "CONVERGED?", converged)
                 conformer_energy_list[conformer_id] = AllChem.UFFGetMoleculeForceField(mol,confId=conformer_id).CalcEnergy()
             conformers = mol.GetConformers()
-            for conformer_id in conformer_id_list:
+            print("Energy List", conformer_energy_list)
+            print(f"{len(converged_conformer_id_list)} generated TS Conformers CONVERGED out of {len(conformer_id_list)}")
+            #print(f"{converged_conformer_id_list} CONVERGED")
+
+            for conformer_id in converged_conformer_id_list:
                 conformer = conformers[conformer_id]
                 #energy = conformer_energy_list[conformer_id]
                 coordinate_list = []
@@ -1375,11 +1462,10 @@ class Molecule:
                 #print ('fixed 3d generation', q_updates)
                 ic.update_xyz(coordinate_list,q_updates)
             coordinates[i] = coordinate_list
+
         return coordinates
 
     def sample_conformers(self,n_conformer = 20,library = 'rdkit',rmsd_criteria = 1.0):
-        from rdkit.Chem import AllChem
-        from rdkit import Chem
         conformer_list = []
         coordinates = self.make_3d_coordinates(n_conformer,library)
         for coordinate_list in coordinates:
@@ -1400,7 +1486,8 @@ class Molecule:
         """
         atom_list = self.atom_list
         n = len(atom_list)
-        f = open(file_directory, 'w')
+        #f = open(file_directory, 'w')
+        f = open(file_directory, 'a')
         if True: # If inappropriate geometry condition is determined, it will be added
             content = str(n)+'\n'            
             if self.energy is not None:

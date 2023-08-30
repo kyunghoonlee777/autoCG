@@ -1,4 +1,3 @@
-
 """
 ---generate_molecule.py---
 Generate 2D graph molecule in ACE-Reaction format from xyz files or SMILES
@@ -333,4 +332,10 @@ def is_same_connectivity(original_molecule,new_molecule,max_coeff=1.3,min_coeff=
         coeff += space
     return is_same,coeff
 
+
+def check_geometry(coordinate_list,criteria=0.5):
+    distance_matrix = spatial.distance_matrix(coordinate_list,coordinate_list)
+    np.fill_diagonal(distance_matrix,100)
+    check_distance_matrix = np.where(distance_matrix < criteria,1,0)
+    return np.sum(check_distance_matrix) < 1
 
