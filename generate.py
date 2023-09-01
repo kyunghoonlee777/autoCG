@@ -15,7 +15,7 @@ from rdkit import Chem
 
 ### ace-reaction libraries ###
 from autoCG import chem
-from autoCG.Calculator import gaussian, orca
+from autoCG.Calculator import gaussian, orca, rdFF
 from autoCG.stereochemistry import chiral
 from autoCG.utils import arranger, ic, process
 
@@ -314,7 +314,6 @@ class GuessGenerator:
             self.num_conformer, library=self.library
         )
 
-        print("hestetsetset")
         if self.considerRS or self.considerEndoExo:
             reactive_atoms = np.unique(np.array(reaction_info["f"]).flatten())
         
@@ -456,6 +455,12 @@ class GuessGenerator:
                     self.step_size,
                 )
             self.write_optimization(molecule, file_name, "a")
+    
+    def move_to_reactant_modified(self, molecule):
+        assert isinstance(self.calculator, rdFF.UFFOptimizer)
+        ###
+        self.calculator.optimize_geometry(molecule, e_tol=self.energy_criteria)
+        pass        
 
     def relax_geometry(self, reactant, constraints, file_name=None):
         energy_list = [self.calculator.get_energy(reactant)]
@@ -476,6 +481,12 @@ class GuessGenerator:
                 break
         # print ('#### Optimized geometry ####')
         # reactant.print_coordinate_list()
+    
+    def relax_geometry_modified(self, molecule):
+        assert isinstance(self.calculator, rdFF.UFFOptimizer)
+
+        for i in range(self.num_step):
+            self.calculator.optimize_geometry(molecule, max_cycles=self.num_relaxation, e_tol=self.energy_criteria)
 
     def get_oriented_RPs(
         self,
@@ -699,21 +710,36 @@ class GuessGenerator:
             if multiplicity is not None:
                 reactant_molecules.multiplicity = multiplicity
                 product_molecules.multiplicity = multiplicity
+            
+            # Modify connectivity
+            for bond in formed_bonds:
+                start,end = bond
+                reactant_molecules.adj_matrix[start][end] -= 1
+                reactant_molecules.adj_matrix[end][start] -= 1
+            r_chg_list, r_bo = process.get_chg_list_and_bo_matrix_from_adj_matrix(reactant_molecules, chg)
+            reactant_molecules.bo_matrix = r_bo
+            reactant_molecules.atom_feature["chg"] = r_chg_list
+            for bond in broken_bonds:
+                start,end = bond
+                product_molecules.adj_matrix[start][end] -= 1
+                product_molecules.adj_matrix[end][start] -= 1
+            p_chg_list, p_bo = process.get_chg_list_and_bo_matrix_from_adj_matrix(product_molecules, chg)
+            product_molecules.bo_matrix = p_bo
+            product_molecules.atom_feature["chg"] = p_chg_list
+
             self.write_log(f"{i+1}th structure moving to R ...\n", file_name=name)
             # print ('moving to R ...')
-            self.move_to_reactant(
-                reactant_molecules, broken_bonds, formed_bonds, "TS_to_R.xyz"
-            )  # New module for finding reactant complex
+            #self.move_to_reactant(
+            #    reactant_molecules, broken_bonds, formed_bonds, "TS_to_R.xyz"
+            #)  # New module for finding reactant complex
+            self.move_to_reactant_modified(reactant_molecules) 
             undesired_bonds = []
             # print ('R geometry ...')
             # reactant_molecules.print_coordinate_list()
-            # Modify connectivity
-            for bond in formed_bonds:
-                start, end = bond
-                reactant_molecules.adj_matrix[start][end] -= 1
-                reactant_molecules.adj_matrix[end][start] -= 1
+            #
             print("###### R optimization #####")
-            self.relax_geometry(reactant_molecules, [], "opt_R.xyz")
+            #self.relax_geometry(reactant_molecules, [], "opt_R.xyz")
+            self.relax_geometry_modified(reactant_molecules)
             print("R optimization finished !!!")
             # reactant_molecules.print_coordinate_list()
             self.write_geometry(reactant_molecules, "R", "xyz")
@@ -722,21 +748,19 @@ class GuessGenerator:
             self.calculator.clean_scratch()
             # print ('moving to P ...')
             # print (formed_bonds,broken_bonds)
-            self.move_to_reactant(
-                product_molecules, formed_bonds, broken_bonds, "TS_to_P.xyz"
-            )
+            self.move_to_reactant_modified(product_molecules) 
+            #self.move_to_reactant(
+            #    product_molecules, formed_bonds, broken_bonds, "TS_to_P.xyz"
+            #)
             # self.calculator.optimize_geometry(molecule=product_molecules,constraints=reaction_info['b'],chg=chg,multiplicity=multiplicity,file_name='product',extra='(modredundant,maxcycles=10) Symmetry=None')
             #'''
             undesired_bonds = []
             # print ('P geometry ...')
             # product_molecules.print_coordinate_list()
-            for bond in broken_bonds:
-                start, end = bond
-                product_molecules.adj_matrix[start][end] -= 1
-                product_molecules.adj_matrix[end][start] -= 1
             print("###### P optimization #####")
             # self.separated_reactant_optimization(product_molecules,
-            self.relax_geometry(product_molecules, [], "opt_P.xyz")
+            #self.relax_geometry(product_molecules, [], "opt_P.xyz")
+            self.relax_geometry_modified(product_molecules)
             print("P optimization finished !!!")
             self.write_geometry(product_molecules, "P", "xyz")
             self.write_geometry(product_molecules, "P", "com")
@@ -977,6 +1001,8 @@ if __name__ == "__main__":
         save_directory = "/".join(names[:-1])
     if args.calculator == "gaussian":
         calculator = gaussian.Gaussian()
+    elif args.calculator == 'uff':
+        calculator = rdFF.UFFOptimizer()
     else:
         calculator = orca.Orca()
     generator = GuessGenerator(
