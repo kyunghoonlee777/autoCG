@@ -314,6 +314,7 @@ class GuessGenerator:
             self.num_conformer, library=self.library
         )
 
+        print("hestetsetset")
         if self.considerRS or self.considerEndoExo:
             reactive_atoms = np.unique(np.array(reaction_info["f"]).flatten())
         
