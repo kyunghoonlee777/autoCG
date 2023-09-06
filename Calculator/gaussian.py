@@ -267,6 +267,7 @@ class Gaussian:
             converter = 0.036749326681
         #os.system('mv new.chk old.chk')
         os.chdir(current_directory)
+        #print("is data empty??", data, "\n", dir(data))
         return converter*data.scfenergies[-1]
 
     def get_force(self,molecule,chg=None,multiplicity=None,file_name='force',extra=' Symmetry = None',save_directory=None):

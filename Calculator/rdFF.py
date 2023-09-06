@@ -2,18 +2,21 @@ import os
 from copy import deepcopy
 
 import numpy as np
-import rdkit.ForceField.rdForceField as FF
 from rdkit import Chem
 from rdkit.Chem import AllChem
-from rdkit.Chem.rdForceFieldHelpers import UFFGetMoleculeForceField
+from rdkit.Chem.rdForceFieldHelpers import (
+    UFFGetMoleculeForceField,
+    UFFOptimizeMolecule,
+)
+import rdkit.ForceField.rdForceField as FF
 
 ### ace-reaction libraries ###
 from autoCG import chem
 from autoCG.utils import process
 
+
 def get_rd_mol3D(ace_mol):
     pos = ace_mol.get_coordinate_list()
-
     rd_mol = ace_mol.get_rd_mol()
     Chem.SanitizeMol(rd_mol)
     AllChem.EmbedMolecule(rd_mol)
@@ -22,59 +25,56 @@ def get_rd_mol3D(ace_mol):
 
     return rd_mol
 
+
 class UFFOptimizer:
     """UFF Optimizer Class (utilizing RDKit)"""
 
     MAXITS = 200
-    ETOL = 0.1
+    #ETOL = 0.1
+    ETOL = 10.
 
     def __init__(self):
-        self.rd_mol = None
-        self.opt = None
         self.save_directory = ""  # rdkit does not need this
         self.working_directory = ""  # rdkit does not need this
         self.command = "rdkit.ForceField"  # rdkit does not need this
-
-    def setUFFoptimizer(self, rd_mol):
-        opt = UFFGetMoleculeForceField(rd_mol)
-        opt.Initialize()
-        self.opt = opt
-
-    def rdoptimize(self, rd_mol, max_cycles=MAXITS, e_tol=ETOL):
-        assert self.opt is not None
-
-        for i in range(max_cycles):
-            energy = self.opt.CalcEnergy()
-            self.opt.Minimize(maxIts=1)
-            if abs(energy - self.opt.CalcEnergy()) < e_tol:
-                break
-
-        return rd_mol.GetConformer().GetPositions()
+        self.opt = None
 
     ### Common functions
-
     def get_energy(self, molecule):
-        #assert self.opt is not None
-        opt = UFFGetMoleculeForceField(get_rd_mol3D(molecule))
+        rd_mol = get_rd_mol3D(molecule)
+        opt = UFFGetMoleculeForceField(
+            rd_mol,
+            #vdwThresh=1.0,
+            ignoreInterfragInteractions=False
+        )
         opt.Initialize()
 
         return opt.CalcEnergy()
 
     def optimize_geometry(
-        self,
-        molecule,
-        max_cycles: int = MAXITS,
-        e_tol: float = ETOL,
+        self, molecule, max_cycles: int = MAXITS, e_tol: float = ETOL
     ):
+        
         rd_mol = get_rd_mol3D(molecule)
+        opt = UFFGetMoleculeForceField(
+            rd_mol,
+            #vdwThresh=1.0,
+            ignoreInterfragInteractions=False
+        )
+        opt.Initialize()
 
-        self.setUFFoptimizer(rd_mol)
-        new_coords = self.rdoptimize(rd_mol, max_cycles, e_tol)
+        for i in range(max_cycles):
+            energy = opt.CalcEnergy()
+            #energy = 0
+            #print("energy: ", energy)
+            opt.Minimize(maxIts=1)
+            if abs(energy - opt.CalcEnergy()) < e_tol:
+                break
 
-        process.locate_molecule(molecule, np.array(new_coords))
+        new_coords = np.array(opt.Positions()).reshape((-1, 3))
+        process.locate_molecule(molecule, new_coords)
 
-        return
-
+    ### wrapper function for autoCG
     def relax_geometry(
         self,
         molecule,
@@ -87,9 +87,10 @@ class UFFOptimizer:
         save_directory=None,
     ):
         return self.optimize_geometry(
-            molecule, bo_matrix=None, max_cycles=max_cycles, e_tol=e_tol
+            molecule, max_cycles=max_cycles, e_tol=e_tol
         )
 
+    ### dummy functions for compatibility with autoCG
     def change_working_directory(self, path):
         pass
 
@@ -130,7 +131,11 @@ if __name__ == "__main__":
 
     Chem.MolToXYZFile(mol, "before.xyz")
 
-    UFF = UFFGetMoleculeForceField(mol)
+    # UFF = UFFGetMoleculeForceField(mol)
+    # UFF.Initialize()
+
+    ffp = MMFFGetMoleculeProperties(mol)
+    UFF = MMFFGetMoleculeForceField(mol, ffp)
     UFF.Initialize()
 
     MAXITS = 1000
@@ -143,7 +148,7 @@ if __name__ == "__main__":
     print(f"Energy before opts(kcal/mol):", energy)
     XYZ += Chem.MolToXYZBlock(mol)
 
-    for i in range(1, MAXITS+1):
+    for i in range(1, MAXITS + 1):
         UFF.Minimize(maxIts=1)
         print(f"Energy after {i} opts(kcal/mol):", UFF.CalcEnergy())
         XYZ += Chem.MolToXYZBlock(mol)
@@ -155,6 +160,3 @@ if __name__ == "__main__":
 
     with open("UFF.xyz", "w") as f:
         f.write(XYZ)
-
-    print(dir(UFF))
-    print(UFF.mol)

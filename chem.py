@@ -340,6 +340,8 @@ class Atom:
             return 4
         elif a=='h': 
             return 1
+        elif a=='be':
+            return 2
         elif a=='b': 
             return 3
         #elif a=='b': return 4
@@ -1234,7 +1236,11 @@ class Molecule:
         #chg_list = self.get_chg_list()
         z_list = self.get_z_list()
         n = len(z_list)
-        virtual_chg = 0 if self.chg is None else self.chg
+        chg = self.get_chg()
+        if chg is None:
+            virtual_chg = 0
+        else:
+            virtual_chg = chg
         """
         if bo_matrix is None:
             chg = self.chg
@@ -1247,16 +1253,11 @@ class Molecule:
         period_list, group_list = self.get_period_group_list()
         adj_matrix = self.get_adj_matrix()
         adjacency_list = np.sum(adj_matrix, axis=0)
-        #adj_matrix = np.where(bo_matrix>0,1,0)
-        #total_bo_list = np.sum(bo_matrix,axis=1)
         
         #Compute SN
-        #lone_pair_list = (group_list - total_bo_list - chg_list)/2
-        #lone_pair_list = np.where(lone_pair_list>0,lone_pair_list,0)
-        #problem_indices = np.where(lone_pair_list<0)[0].tolist()
         problem_indices = np.flatnonzero(adjacency_list > self.get_max_valency_list())
-        print("z_list", z_list)
-        print("problem_indices", problem_indices)
+        #print("z_list", z_list)
+        #print("problem_indices", problem_indices)
         new_z_list = np.copy(z_list)
 
         for idx in problem_indices:
@@ -1264,13 +1265,11 @@ class Molecule:
             group = group_list[idx]
             adj = adjacency_list[idx]
 
-            if period < 4 and adj == 3:
-                new_z_list[idx] = 5       
-                                    #for deficient octet, 
-                                    #replacing with Boron would be enough
+            if group < 4 and adj < 4: 
+                new_z_list[idx] = 2 + adj 
             elif period == 1:       
                 if adj > 1: #Case of hydrogen overvalence
-                    new_z_list[idx] = 8 #replace with Oxygen
+                    new_z_list[idx] = 10 - adj #replace with Oxygen
             elif period == 2:
                 if adj == 1:
                     new_z_list[idx] = 9 #replace with Fluorine
@@ -1284,14 +1283,6 @@ class Molecule:
         #Construct new Molecule
         virtual_molecule = Molecule([new_z_list, adj_matrix, None, None])
 
-        #num of electron parity conservation!
-        #unless, unreplaced atoms might get 
-        #absurd formal charges at the next step
-        if np.sum(z_list)%2 != np.sum(new_z_list)%2:
-            print("#### parity compensation applied #### ")
-            print(f"# of e: before\t{np.sum(z_list)}, after\t{np.sum(new_z_list)}")
-            virtual_chg -= 1
-
         #Construct BO and Chg
         new_bo_matrix = process.get_bo_matrix_from_adj_matrix(virtual_molecule, virtual_chg)
         new_bo_sum = np.sum(new_bo_matrix, axis=0)
@@ -1301,17 +1292,20 @@ class Molecule:
         new_chg_list = np.zeros(n)
         for i in range(n):
             g = new_group_list[i]
-            b = new_bo_sum[i]
+            bo = new_bo_sum[i]
+            chg = g + bo - 2*min(g,4)
+            if chg % 2 != (g-bo)%2:
+                chg += 1
+            #print (chg,g,bo)
+            '''
             if new_period_list[i] == 2:
-                new_chg_list[i] = max(0, g + b - 2*min(g, 4))
+                new_chg_list[i] = max(0, g + bo - 2*min(g, 4))
             else:
-                new_chg_list[i] = max(0, b-g)
-
-
-        
-        #new_chg_list = process.get_chg_list_from_bo_matrix(virtual_molecule, virtual_chg, new_bo_matrix)
-        print("new_bo_matrix:\n", new_bo_matrix)
-        print("new_chg:\n", new_chg_list)
+                new_chg_list[i] = max(0, bo-g)
+            '''
+            new_chg_list[i] = chg
+        #print("new_bo_matrix:\n", new_bo_matrix)
+        #print("new_chg:\n", new_chg_list)
         
         """
         #Handle radicals
@@ -1331,7 +1325,6 @@ class Molecule:
 
         virtual_molecule.set_bo_matrix(new_bo_matrix)
         virtual_molecule.atom_feature['chg'] = new_chg_list
-
         """
             if period_list[i] == 1: # Case of hydrogen overvalence
                 if sn_list[i] > 1:
@@ -1383,32 +1376,37 @@ class Molecule:
                 Chem.SanitizeMol(mol)
                 mol = Chem.AddHs(mol)
                 print("in making 3d coord", Chem.MolToSmiles(mol))
+                print("SMILES for Hypothetical TS:\t", Chem.MolToSmiles(mol))
                 use_ic_update = True
             if mol is None:
                 print ('Impossible embedding')
                 return []
-            print("SMILES for Hypothetical TS:\t", Chem.MolToSmiles(mol))
             conformer_id_list = AllChem.EmbedMultipleConfs(mol, num_conformer, params)
             #print (conformer_id_list)
             conformer_energy_list = dict()
             converged_conformer_id_list = []
             for conformer_id in conformer_id_list:
                 converged = not AllChem.UFFOptimizeMolecule(mol, confId=conformer_id)
+                #if converged: converged_conformer_id_list.append(conformer_id)
                 if converged: converged_conformer_id_list.append(conformer_id)
                 print(conformer_id, "CONVERGED?", converged)
                 conformer_energy_list[conformer_id] = AllChem.UFFGetMoleculeForceField(mol,confId=conformer_id).CalcEnergy()
+
             conformers = mol.GetConformers()
             print("Energy List", conformer_energy_list)
             print(f"{len(converged_conformer_id_list)} generated TS Conformers CONVERGED out of {len(conformer_id_list)}")
             #print(f"{converged_conformer_id_list} CONVERGED")
 
-            for conformer_id in converged_conformer_id_list:
+            #for conformer_id in converged_conformer_id_list:
+            for conformer_id in conformer_id_list:
                 conformer = conformers[conformer_id]
                 #energy = conformer_energy_list[conformer_id]
+                Chem.rdmolfiles.MolToXYZFile(mol, f"{conformer_id}.xyz", confId=conformer_id)
                 coordinate_list = []
                 for i in range(n): 
                     position = conformer.GetAtomPosition(i) 
                     coordinate_list.append((position[0],position[1],position[2]))
+                    print(position[0], position[1], position[2])
                 if len(coordinate_list) > 0:
                     coordinate_list = np.array(coordinate_list)
                     coordinates.append(coordinate_list)
@@ -1444,8 +1442,8 @@ class Molecule:
             return None
         # (TODO): Need to come up with better algorithm, best one is to simply reoptimize with uff
         # Reupdate molecule
+        '''
         scale = 1.1 # Make distance to bond length, value between 1.05 ~ 1.2
-        
         # Repermute coordinates
         for i in range(len(coordinates)):
             coordinate_list = coordinates[i]
@@ -1460,9 +1458,11 @@ class Molecule:
                     else:
                         q_updates[bond] = 0.0
                 #print ('fixed 3d generation', q_updates)
-                ic.update_xyz(coordinate_list,q_updates)
+                updateGood, trj = ic.update_xyz(coordinate_list,q_updates)
+                print("is use_ic_update GOOD?", updateGood)
+                print(trj[-1])
             coordinates[i] = coordinate_list
-
+        '''
         return coordinates
 
     def sample_conformers(self,n_conformer = 20,library = 'rdkit',rmsd_criteria = 1.0):
