@@ -6,7 +6,6 @@ For mapping atomic connectivity matrices of the reactant and the product
 '''
 
 # JCIM 2012, 52, 84.
-
 from gurobipy import *
 import numpy as np
 import os

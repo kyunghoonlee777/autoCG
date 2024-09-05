@@ -169,10 +169,12 @@ def update_geometry(molecule,q_updates,criteria=1e-4,max_iteration=30):
     if not converged:
         print ('update:',q_updates)
         print ('Coordinate trajectory ...')
+        original_xyz_coordinate = molecule.get_coordinate_list()
         for i,xyz_coordinate in enumerate(trajectory):
             print (f'{i+1}th iterataion ...')
             process.locate_molecule(molecule,xyz_coordinate,False)
             molecule.print_coordinate_list()
+        process.locate_molecule(molecule,original_xyz_coordinate)
     else:
         process.locate_molecule(molecule,trajectory[-1],False)
     return converged

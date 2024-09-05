@@ -2,7 +2,7 @@ import numpy as np
 import time
 import pickle
 
-from autoCG.utils.ReactionMapper import ReactionMap
+from autoCG.utils.mapping import ReactionMap
 
 
 def get_net_reacted_molecules(intermediate_i,intermediate_j):

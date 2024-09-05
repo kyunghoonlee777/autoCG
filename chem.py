@@ -11,6 +11,7 @@ import itertools
 
 from autoCG.utils import ic
 from autoCG.utils import process
+from autoCG.utils import make_smiles
 
 
 class Atom:
@@ -37,11 +38,9 @@ class Atom:
     def __init__(self,data = None):
         self.atomic_number = None
         self.element = None
-        self.x = 0.00
-        self.y = 0.00
-        self.z = 0.00
-        self.molecule_index = 0
-        self.is_divalent_hydrogen = False
+        self.x = None
+        self.y = None
+        self.z = None
         if data is not None:
             if type(data) == str:
                 self.element = data
@@ -85,23 +84,6 @@ class Atom:
         self.y = y
         self.z = z
 
-    def set_molecule_index(self,index):
-        self.molecule_index = index
-
-    def set_is_divalent_hydrogen(self,divalency):
-        self.is_divalent_hydrogen = divalency
-
-
-    def set_atom_type(self, atom_type):
-        """ An attribute for defining atom types used in molecular mechanics calculations (e.g. C-CT, H-HC, and so on.) """ 
-        self.atom_type = atom_type
-
-    def set_configuration(self,configuration):
-        self.configuration = configuration
-
-    def set_is_active(self, is_active):
-        """ True or False. Whether an atom is assigned as active one or not""" 
-        self.is_active = is_active
 
 
     def get_atomic_number(self):
@@ -157,23 +139,11 @@ class Atom:
     def get_z(self):
         return self.z
 
+    
     def get_coordinate(self):
         return np.array([self.x,self.y,self.z])    
 
-    def get_molecule_index(self):
-        return self.molecule_index
-
-    def get_is_divalent_hydrogen(self):
-        return self.is_divalent_hydrogen
-
-    def get_atom_type(self):
-        try:
-            return self.atom_type
-        except:
-            print ('Set atom type!!!')
-            return None
-
-
+    
     def get_radius(self):
         """
         Returns a radius information of a given atom. Reference is given here: Dalton Trans., 2008, 2832-2838
@@ -314,15 +284,6 @@ class Atom:
             group = 8 + last_orbital[2]
         return period,group
 
-    def get_electron_count(self):
-        """
-        """
-        element = self.get_element()
-        num_electrons = dict(SC=3,TI=4, V=5,CR=6,MN=7,FE=8,CO=9,NI=10,CU=11,ZN=12,\
-                       Y=3,ZR=4,NB=5,MO=6,TC=7,RU=8,RH=9,PD=10,AG=11,CD=12,\
-                      LU=3,HF=4,TA=5, W=6,RE=7,OS=8,IR=9,PT=10,AU=11,HG=12)
-        return num_electrons[element]
-
     def get_max_valency(self): 
         """
         Returns maximal valency of a given atom. Examples of those values are shown in the main code.  
@@ -395,8 +356,6 @@ class Atom:
         new_atom.x = self.x
         new_atom.y = self.y
         new_atom.z = self.z
-        #new_atom.molecule_index = self.molecule_index
-        #new_atom.is_divalent_hydrogen = self.is_divalent_hydrogen
         return new_atom 
 
     def is_same_atom(self,atom):
@@ -467,7 +426,6 @@ class Molecule:
         self.chg = None
         self.multiplicity = None
         self.energy = None        
-        #self.center_of_mass = None
         self.smiles = None
         self.c_eig_list = None
         self.formula_id = None
@@ -478,69 +436,14 @@ class Molecule:
             pass
 
         elif type(data) == str:
-            if data[-4:] == '.xyz':
-                # data is already opened file
-                f = open(data,'r')
-                atom_list=[]
-                try:
-                    atom_num = int(f.readline())
-                except:
-                    print ('Wrong format! Should start with number of atoms!')
-                try:
-                    energy = float(f.readline())
-                    self.energy = energy
-                except:
-                    self.energy = None
-                for i in range(atom_num):
-                    try:
-                        content = f.readline().strip()
-                        atom_line = content.split()
-                        #atomic_number = int(atom_line[0])
-                        element_symbol = atom_line[0]
-                        x = float(atom_line[1]) 
-                        y = float(atom_line[2]) 
-                        z = float(atom_line[3])
-                        new_atom = Atom(element_symbol)
-                        new_atom.x = x
-                        new_atom.y = y
-                        new_atom.z = z
-                        atom_list.append(new_atom)
-                    except:
-                        print ('Error found in:',content)
-                        print ('Check the file again:',data)
-                self.atom_list = atom_list
+            if data[-4] == '.':
+                conformer = Conformer(data)
                 # At least make adjacency
-                self.adj_matrix = process.get_adj_matrix_from_distance(self)
-            elif data[-4:] == '.com':
-                f = open(data,'r')
-                atom_list=[]
-                try:
-                    info = f.readline().strip().split()
-                    chg = int(info[0])
-                    multiplicity = int(info[1])
-                    self.chg = chg
-                    self.multiplicity = multiplicity
-                except:
-                    print ('Wrong format! Should start with number of atoms!')
-                while True:
-                    try:
-                        content = f.readline().strip()
-                        atom_line = content.split()
-                        #atomic_number = int(atom_line[0])
-                        element_symbol = atom_line[0]
-                        x = float(atom_line[1]) 
-                        y = float(atom_line[2]) 
-                        z = float(atom_line[3])
-                        new_atom = Atom(element_symbol)
-                        new_atom.x = x
-                        new_atom.y = y
-                        new_atom.z = z
-                        atom_list.append(new_atom)
-                    except:
-                        break
-                self.atom_list = atom_list
-                # At least make adjacency
-                self.adj_matrix = process.get_adj_matrix_from_distance(self)
+                self.atom_list = conformer.atom_list
+                self.chg = conformer.chg
+                self.multiplicity = conformer.multiplicity
+                self.energy = conformer.energy
+                self.adj_matrix = conformer.get_adj_matrix()
             else:
                 # Generate data with rdkit
                 from rdkit import Chem            
@@ -689,6 +592,62 @@ class Molecule:
         radius_list = list(map(lambda x:x.get_radius(),self.atom_list))
         return radius_list
 
+    def get_smiles(self, method="none", find_stereocenter="N"):
+        """
+        Returns smiles of a given molecule. It could return different smiles according to the atom order.
+
+        :param method(str):
+            method can either be 'ace' or 'rdkit'
+            If 'ace' is used, smiles is generated throughout our defined method
+            If 'rdkit' is used, it generates smiles using rdkit module
+
+        :param find_stereocenter(str):
+            It can have either 'Y' or 'N'. If 'Y'(yes), stereo information such as E/Z or R/S are desginated in the smiles
+
+        :return smiles(str):
+            Returns a smiles of given molecule generated by input option
+        """
+        from rdkit import Chem
+
+        if method == "ace":
+            # Implement ACE methods
+            atom_list = self.atom_list
+            bo_matrix = self.get_matrix("bo")
+            fc_list = self.get_chg_list()
+            bond_list = self.get_bond_list(False)
+            if bo_matrix is None:
+                adj_matrix = self.get_matrix("adj")
+                if adj_matrix is None or self.chg is None:
+                    print("We need to know both adjacency and charge!!!")
+                    return None
+                else:
+                    bo_matrix = process.get_bo_matrix_from_adj_matrix(self, self.chg)
+                    fc_list = process.get_chg_list_from_bo_matrix(
+                        self, self.chg, bo_matrix
+                    )
+            elif fc_list is None:
+                fc_list = process.get_chg_list_from_bo_matrix(self, self.chg, bo_matrix)
+            fc_list = fc_list.tolist()
+            # Check element is ready!
+            for atom in atom_list:
+                atom.set_element(atom.get_element())
+            smiles_list = make_smiles.GetSMILES(
+                atom_list, bo_matrix, bond_list, fc_list, find_stereocenter
+            )
+            return smiles_list[0]
+        elif method == "rdkit":
+            if self.smiles != None:
+                return self.smiles
+            else:
+                rd_mol = self.get_rd_mol()
+                SMILES = Chem.MolToSmiles(rd_mol)
+                return SMILES
+        elif self.smiles != None:
+            return self.smiles
+        else:
+            return None
+
+
             
     def get_matrix(self,type_of_matrix = 'bo'):
         """
@@ -746,32 +705,13 @@ class Molecule:
                 return False
             return True
 
-    def get_distance_matrix(self,mode = 'spatial'):
-        if mode == 'spatial':
-            coordinate_list = self.get_coordinate_list()
-            if coordinate_list is not None:
-                distance_matrix = spatial.distance_matrix(coordinate_list,coordinate_list)
-            else:
-                return None
-        elif mode == 'graph':
-            distance_matrix = self.get_matrix('distance')
-        return distance_matrix                                        
+    def get_distance_matrix(self):
+        return self.get_matrix('distance')
 
-    def get_ratio_matrix(self):
-        atom_list = self.atom_list
-        n = len(atom_list)
-        radius_list = self.get_radius_list()
-        radius_matrix_flatten = np.repeat(radius_list,n)
-        radius_matrix = radius_matrix_flatten.reshape((n,n))
-        radius_sum_matrix = radius_matrix + radius_matrix.T
-        coordinate_list = self.get_coordinate_list()
-        distance_matrix = spatial.distance_matrix(coordinate_list,coordinate_list)
-        ratio_matrix = distance_matrix/radius_sum_matrix
-        return ratio_matrix
-        
 
     def __eq__(self,molecule):
         return self.is_same_molecule(molecule,True)
+
        
     def is_same_molecule(self,molecule,option=False):
         """
@@ -832,7 +772,6 @@ class Molecule:
         if copy_all:
             # Copy other attributes
             new_molecule.energy = self.energy
-            new_molecule.center_of_mass = self.center_of_mass
             new_molecule.smiles = self.smiles
             new_molecule.c_eig_list = self.c_eig_list
         return new_molecule
@@ -1076,8 +1015,7 @@ class Molecule:
         return element_idx_list
 
 
-
-    def get_rd_mol(self,include_stereo = False):
+    def get_rd_mol(self,atom_stereos = dict(), bond_stereos = dict()):
         """
         Returns molecule with type pyclass 'rdkit.Chem.rdchem.Mol' from our type pyclass 'Molecule'
         Note that atom ordering and bond order is well preserved
@@ -1114,7 +1052,7 @@ class Molecule:
             if bond[0] < bond[1]:
                 rde_mol.AddBond(bond[0],bond[1],bond_types[bond[2]])
         rd_mol = rde_mol.GetMol()
-
+        Chem.SanitizeMol(rd_mol)
         return rd_mol
 
     def get_ob_mol(self,include_stereo=False):
@@ -1154,22 +1092,284 @@ class Molecule:
         '''
         return ob_mol
 
-    def get_coordinate_list(self):
-        """
-        Returns 3d coordinate of a given molecule
-        
-        :param:
+    def sanitize(self):
+        adj_matrix = self.get_adj_matrix()
+        if adj_matrix is None:
+            print ('Cannot sanitize molecule because there is no adj matrix information !!!')
+        else:
+            chg = self.get_chg()
+            if chg is None:
+                print ('Cannot sanitize molecule because there is no charge information !!!')
+            bo_matrix = process.get_bo_matrix_from_adj_matrix(self,chg)
+            fc_list = process.get_chg_list_from_bo_matrix(self,chg,bo_matrix)
+            self.bo_matrix = bo_matrix
+            self.atom_feature['chg'] = fc_list
 
-        :return coordinate_list(list(size n) of tuple of float(size 3)):
-            
+
+    def get_valid_molecule(self):
+        #bo_matrix = self.get_matrix('bo')
+        #chg_list = self.get_chg_list()
+        z_list = self.get_z_list()
+        original_z_list = np.copy(z_list)
+        n = len(z_list)
+        chg = self.get_chg()
+        if chg is None:
+            virtual_chg = 0
+        else:
+            virtual_chg = chg
         """
-        coordinate_list = []
-        atom_list = self.atom_list
-        if 'coords' in self.atom_feature:
-            return self.atom_feature['coords']
-        for atom in atom_list:
-            coordinate_list.append([atom.x,atom.y,atom.z])
+        if bo_matrix is None:
+            chg = self.chg
+            if chg is None:
+                chg = 0
+            bo_matrix = process.get_bo_matrix_from_adj_matrix(self,chg)
+            chg_list = process.get_chg_list_from_bo_matrix(self,chg,bo_matrix)
+        """
+        #n = len(chg_list)
+        period_list, group_list = self.get_period_group_list()
+        adj_matrix = self.get_adj_matrix()
+        adjacency_list = np.sum(adj_matrix, axis=0)
+        
+        #Compute SN
+        problem_indices = np.flatnonzero(adjacency_list > self.get_max_valency_list())
+        #print("z_list", z_list)
+        #print("problem_indices", problem_indices)
+        new_z_list = np.copy(z_list)
+        for idx in problem_indices:
+            period = period_list[idx]
+            group = group_list[idx]
+            adj = adjacency_list[idx]
+            if period == 1:
+                if adj > 1:
+                    new_z_list[idx] = 10 - adj
+            else:
+                if adj < 5:
+                    if period == 2:
+                        new_z_list[idx] = 10 - adj
+                    else:
+                        new_z_list[idx] = 18 - adj
+                else:
+                    new_z_list[idx] = 10 + adj #replace with one higher period element with proper valency
+        #Construct new Molecule
+        virtual_molecule = Molecule([new_z_list, adj_matrix, None, None])
+
+        #Construct BO and Chg
+        new_bo_matrix = process.get_bo_matrix_from_adj_matrix(virtual_molecule, virtual_chg)
+        new_bo_sum = np.sum(new_bo_matrix, axis=0)
+
+        new_period_list, new_group_list = virtual_molecule.get_period_group_list()
+        # Modify new_z for atoms containing unpaired electron ...
+        for i in range(n):
+            group = new_group_list[i]
+            bo = new_bo_sum[i]
+            if group % 2 != bo % 2:
+                new_group_list[i] += 1
+                virtual_molecule.atom_list[i].atomic_number += 1
+
+        for i in range(n):
+            group = new_group_list[i]
+            bo = new_bo_sum[i]
+            parity = 0
+            # new_z: Modified z when overvalence is observed. = 10-bo for period=2, = 18 - bo (bo <=4), = bo + 10 (bo>4)
+            if new_period_list[i] == 1:
+                octet = 1 # For checking validity 
+                new_z = 10 - bo
+            elif new_period_list[i] == 2:
+                octet = min(group,4)
+                new_z = 10 - bo
+            else:
+                octet = group
+                if bo > 4:
+                    new_z = bo + 10 # Reconsider valence expansion
+                else:
+                    new_z = 18 - bo # Just same with F, O, N substitution, but with higher order
+            if not process.check_atom_validity(group,bo,0,octet): # Set every charge equal to zero 
+                virtual_molecule.atom_list[i].set_atomic_number(int(new_z))
+        virtual_molecule.set_bo_matrix(new_bo_matrix)
+        virtual_molecule.atom_feature['chg'] = np.zeros((n)) # Set charge zero
+        new_z_list = virtual_molecule.get_z_list()
+        return virtual_molecule
+
+
+    def make_3d_coordinate(self,library='rdkit',atom_stereos = dict(),bond_stereos = dict()):
+        return self.make_3d_coordinates(1,library)[0]
+
+
+    def make_3d_coordinates(self,num_conformer = 1,library = 'rdkit',atom_stereos = dict(),bond_stereos = dict()):
+        """
+        Returns possible 3d molecular geometry using other libraries, mainly 'babel' and 'rdkit'
+
+        :param library(str):
+            Either 'babel' or 'rdkit' are possible. You can add your own found libraries for generating 3d structure 
+        
+        :return coordinate_list(list of tuples with size 3(float)):
+            3d geometry of molecule generated by other libraries
+
+        """
+        from rdkit.Chem import AllChem
+        from rdkit import Chem
+        mol = None
+        coordinates = []
+        changed_indices = []
+        n = len(self.atom_list)
+        if library == 'rdkit':
+            params = Chem.rdDistGeom.srETKDGv3()
+            #params.pruneRmsThresh = 0.25
+            try:
+                mol = self.get_rd_mol(atom_stereos = atom_stereos, bond_stereos = bond_stereos)
+                Chem.SanitizeMol(mol)
+                mol = Chem.AddHs(mol)
+            except:
+                virtual_molecule,changed_indices = self.get_valid_molecule()
+                mol = virtual_molecule.get_rd_mol(atom_stereos = atom_stereos, bond_stereos = bond_stereos)
+                Chem.SanitizeMol(mol)
+                mol = Chem.AddHs(mol)
+                print("in making 3d coord", Chem.MolToSmiles(mol))
+                print("SMILES for Hypothetical TS:\t", Chem.MolToSmiles(mol))
+            if mol is None:
+                print ('Impossible embedding')
+                return []
+            conformer_id_list = Chem.rdDistGeom.EmbedMultipleConfs(mol, num_conformer, params)
+            #print (conformer_id_list)
+            conformer_energy_list = dict()
+            converged_conformer_id_list = []
+            for conformer_id in conformer_id_list:
+                converged = not AllChem.UFFOptimizeMolecule(mol, confId=conformer_id)
+                #if converged: converged_conformer_id_list.append(conformer_id)
+                if converged: converged_conformer_id_list.append(conformer_id)
+                #print(conformer_id, "CONVERGED?", converged)
+                conformer_energy_list[conformer_id] = AllChem.UFFGetMoleculeForceField(mol,confId=conformer_id).CalcEnergy()
+
+            conformers = mol.GetConformers()
+            #print("Energy List", conformer_energy_list)
+            #print(f"{len(converged_conformer_id_list)} generated TS Conformers CONVERGED out of {len(conformer_id_list)}")
+            #print(f"{converged_conformer_id_list} CONVERGED")
+
+            #for conformer_id in converged_conformer_id_list:
+            print ('Conformer XYZs ...')
+            for conformer_id in conformer_id_list:
+                conformer = conformers[conformer_id]
+                #energy = conformer_energy_list[conformer_id]
+                #Chem.rdmolfiles.MolToXYZFile(mol, f"{conformer_id}.xyz", confId=conformer_id)
+                coordinate_list = []
+                for i in range(n): 
+                    position = conformer.GetAtomPosition(i) 
+                    coordinate_list.append((position[0],position[1],position[2]))
+                   # print(virtual_molecule.atom_list[i].get_element(),position[0], position[1], position[2])
+                if len(coordinate_list) > 0:
+                    coordinate_list = np.array(coordinate_list)
+                    coordinates.append(coordinate_list)
+        elif library == 'babel': 
+            from openbabel import pybel
+            from openbabel import openbabel 
+            import os
+            #### pybel method
+            try:
+                ob_mol = self.get_ob_mol()
+            except:
+                virtual_molecule,changed_indices = self.get_valid_molecule()
+                ob_mol = virtual_molecule.get_ob_mol()
+            pybel_mol = pybel.Molecule(ob_mol)
+            for i in range(num_conformer):
+                coordinate_list = []
+                pybel_mol.make3D()
+                pybel_mol.localopt('uff',1000)
+                pybel_atom_list = pybel_mol.atoms
+                #print ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
+                for atom in pybel_atom_list:
+                    position = atom.coords
+                    coordinate_list.append((position[0],position[1],position[2]))
+                    #print (atom.atomicnum,position[0],position[1],position[2])
+                if len(coordinate_list) > 0:
+                    coordinate_list = np.array(coordinate_list)
+                    coordinates.append(coordinate_list)
+        else:
+            print ('Give us algorithm for generating 3D!!!')
+            print ('You can try your own algorithm here!!!')
+            ######### Your own algorithm here #########
+            return None
+        # (TODO): Need to come up with better algorithm, best one is to simply reoptimize with uff
+        # Reupdate molecule
+        scale = 1.05 # Make distance to bond length, value between 1.05 ~ 1.2
+        for i in range(len(coordinates)):
+            coordinate_list = coordinates[i]
+            if len(changed_indices) > 0:
+                internal_coordinates = self.get_bond_list(False)
+                q_updates = dict()
+                radius_list = self.get_radius_list()
+                for bond in internal_coordinates:
+                    start, end = bond
+                    if start in changed_indices or end in changed_indices:
+                        delta_d = scale * (radius_list[start] + radius_list[end]) - ic.get_distance(coordinate_list,start,end)
+                        if np.abs(delta_d) > 0.15:
+                            q_updates[bond] = delta_d
+                        else:
+                            q_updates[bond] = 0.0
+                    else:
+                        q_updates[bond] = 0.0
+                #print ('fixed 3d generation', q_updates)
+                updateGood, trj = ic.update_xyz(coordinate_list,q_updates)
+                #print("is use_ic_update GOOD?", updateGood)
+                #print(trj[-1])
+            coordinates[i] = coordinate_list
+        return coordinates
+
+
+    def sample_conformers(self,n_conformer = 20,library = 'rdkit',atom_stereos = dict(),bond_stereos = dict()):
+        conformer_list = []
+        coordinates = self.make_3d_coordinates(n_conformer,library)
+        chg = self.get_chg()
+        multiplicity = self.get_multiplicity()
+        for coordinate_list in coordinates:
+            new_atom_list = [atom.copy() for atom in self.atom_list]
+            conformer = Molecule((self.get_z_list(),self.get_adj_matrix(),None,self.get_chg_list()))
+            process.locate_molecule(conformer,coordinate_list)
+            conformer_list.append(conformer)
+        return conformer_list
+
+
+    def get_coordinate_list(self):
+        coordinate_list = [[atom.x,atom.y,atom.z] for atom in self.atom_list]
         return np.array(coordinate_list)
+    
+
+    def print_coordinate_list(self,option = 'element'):
+        print (self.get_content(option))
+        
+
+    def get_content(self,option='element',criteria = 1e-4):
+        atom_list = self.atom_list
+        content = ''
+        for atom in atom_list:
+            content += atom.get_content(option,criteria)
+        return content.strip()
+
+
+    def write_geometry(self,file_directory, option='element',criteria = 1e-4):
+        """
+        Writes xyz file that contains the 3d molecular geometry
+    
+        :param file_directory(str):
+            Directory for saving 3d geometry xyz file
+
+        :return:
+        """
+        atom_list = self.atom_list
+        n = len(atom_list)
+        f = open(file_directory, 'w')
+        #f = open(file_directory, 'a')
+        if True: # If inappropriate geometry condition is determined, it will be added
+            content = str(n)+'\n'            
+            if self.energy is not None:
+                content = content + str(self.energy)+'\n'
+            else:
+                content = content + '\n'
+            f.write(content)
+            for atom in atom_list:
+                f.write(atom.get_content(option,criteria))
+            f.close()
+        else:
+            print ('Wrong geometry!!!')
 
     def get_distance_between_atoms(self,idx1,idx2):
         """
@@ -1211,307 +1411,6 @@ class Molecule:
         return angle
 
 
-    def print_coordinate_list(self,option='element'):
-        coordinate_list = self.get_coordinate_list()
-        atom_list = self.atom_list
-        n = len(atom_list)
-        for i in range(n):
-            coordinate = coordinate_list[i]
-            element = atom_list[i].get_element()
-            if option == 'number':
-                element = atom_list[i].get_atomic_number()
-            print_x = coordinate[0]
-            print_y = coordinate[1]
-            print_z = coordinate[2]
-            if abs(print_x) < 0.0001:
-                print_x = 0.00
-            if abs(print_y) < 0.0001:
-                print_y = 0.00
-            if abs(print_z) < 0.0001:
-                print_z = 0.00
-            print (element, print_x,print_y,print_z)
-
-    def get_valid_molecule(self):
-        #bo_matrix = self.get_matrix('bo')
-        #chg_list = self.get_chg_list()
-        z_list = self.get_z_list()
-        n = len(z_list)
-        chg = self.get_chg()
-        if chg is None:
-            virtual_chg = 0
-        else:
-            virtual_chg = chg
-        """
-        if bo_matrix is None:
-            chg = self.chg
-            if chg is None:
-                chg = 0
-            bo_matrix = process.get_bo_matrix_from_adj_matrix(self,chg)
-            chg_list = process.get_chg_list_from_bo_matrix(self,chg,bo_matrix)
-        """
-        #n = len(chg_list)
-        period_list, group_list = self.get_period_group_list()
-        adj_matrix = self.get_adj_matrix()
-        adjacency_list = np.sum(adj_matrix, axis=0)
-        
-        #Compute SN
-        problem_indices = np.flatnonzero(adjacency_list > self.get_max_valency_list())
-        #print("z_list", z_list)
-        #print("problem_indices", problem_indices)
-        new_z_list = np.copy(z_list)
-
-        for idx in problem_indices:
-            period = period_list[idx]
-            group = group_list[idx]
-            adj = adjacency_list[idx]
-
-            if group < 4 and adj < 4: 
-                new_z_list[idx] = 2 + adj 
-            elif period == 1:       
-                if adj > 1: #Case of hydrogen overvalence
-                    new_z_list[idx] = 10 - adj #replace with Oxygen
-            elif period == 2:
-                if adj == 1:
-                    new_z_list[idx] = 9 #replace with Fluorine
-                elif adj == 2:
-                    new_z_list[idx] = 8 #replace with Oxygen
-                else:
-                    new_z_list[idx] = 10 + adj #replace with one higher period element with proper valency
-            else:
-                new_z_list[idx] = z_list[idx] - group + adj #replace with the same period element with proper valency
-
-        #Construct new Molecule
-        virtual_molecule = Molecule([new_z_list, adj_matrix, None, None])
-
-        #Construct BO and Chg
-        new_bo_matrix = process.get_bo_matrix_from_adj_matrix(virtual_molecule, virtual_chg)
-        new_bo_sum = np.sum(new_bo_matrix, axis=0)
-
-        #chg does not have to exact. chg list which would not give error in rdkit is enough
-        new_period_list, new_group_list = virtual_molecule.get_period_group_list()
-        new_chg_list = np.zeros(n)
-        for i in range(n):
-            g = new_group_list[i]
-            bo = new_bo_sum[i]
-            chg = g + bo - 2*min(g,4)
-            if chg % 2 != (g-bo)%2:
-                chg += 1
-            #print (chg,g,bo)
-            '''
-            if new_period_list[i] == 2:
-                new_chg_list[i] = max(0, g + bo - 2*min(g, 4))
-            else:
-                new_chg_list[i] = max(0, bo-g)
-            '''
-            new_chg_list[i] = chg
-        #print("new_bo_matrix:\n", new_bo_matrix)
-        #print("new_chg:\n", new_chg_list)
-        
-        """
-        #Handle radicals
-        #LHS: num of valence electrons % 2
-        #if num of valence electrons is odd number, then give additional negative charge,
-        #for not making radical (to avoid any possible side-effects)
-        for idx in np.flatnonzero((new_group_list - new_chg_list - new_bo_sum)%2 == 1):
-            if new_period_list[idx] == 2 and new_group_list[idx] == 3: 
-                new_chg_list[idx] += 1 #Exception for Nitrogen
-                                       #Nitrogen is only allowed for 3 valency at most.
-                                       #So positive charge is given
-            else:
-                new_chg_list[idx] -= 1
-            new_chg_list[idx] -= 1
-
-        """
-
-        virtual_molecule.set_bo_matrix(new_bo_matrix)
-        virtual_molecule.atom_feature['chg'] = new_chg_list
-        """
-            if period_list[i] == 1: # Case of hydrogen overvalence
-                if sn_list[i] > 1:
-                    new_z_list[i] = 8
-                    new_chg_list[i] = 0
-            else:
-                new_chg_list[i] = 0
-                new_z_list[i] = sn_list[i] + 10
-                #new_z_list[i] = total_bo_list[i] + 10 + (total_bo_list[i] + chg_list[i] + z_list[i])%2
-        """
-        #print (new_z_list,new_chg_list,sn_list,bo_matrix)
-        #print ('new z',new_z_list)
-        #print ('new chg',new_chg_list)
-        #virtual_molecule = Molecule((new_z_list,None,bo_matrix,new_chg_list))
-        
-        return virtual_molecule
-
-
-    def make_3d_coordinate(self,library='rdkit'):
-        return self.make_3d_coordinates(1,library)[0]
-
-    def make_3d_coordinates(self,num_conformer = 1,library = 'rdkit'):
-        """
-        Returns possible 3d molecular geometry using other libraries, mainly 'babel' and 'rdkit'
-
-        :param library(str):
-            Either 'babel' or 'rdkit' are possible. You can add your own found libraries for generating 3d structure 
-        
-        :return coordinate_list(list of tuples with size 3(float)):
-            3d geometry of molecule generated by other libraries
-
-        """
-        from rdkit.Chem import AllChem
-        from rdkit import Chem
-        mol = None
-        use_ic_update = False
-        coordinates = []
-        n = len(self.atom_list)
-        if library == 'rdkit':
-            params = Chem.rdDistGeom.srETKDGv3()
-            #params.pruneRmsThresh = 0.25
-            try:
-                mol = self.get_rd_mol()
-                Chem.SanitizeMol(mol)
-                mol = Chem.AddHs(mol)
-            except:
-                virtual_molecule = self.get_valid_molecule()
-                mol = virtual_molecule.get_rd_mol()
-                Chem.SanitizeMol(mol)
-                mol = Chem.AddHs(mol)
-                print("in making 3d coord", Chem.MolToSmiles(mol))
-                print("SMILES for Hypothetical TS:\t", Chem.MolToSmiles(mol))
-                use_ic_update = True
-            if mol is None:
-                print ('Impossible embedding')
-                return []
-            conformer_id_list = AllChem.EmbedMultipleConfs(mol, num_conformer, params)
-            #print (conformer_id_list)
-            conformer_energy_list = dict()
-            converged_conformer_id_list = []
-            for conformer_id in conformer_id_list:
-                converged = not AllChem.UFFOptimizeMolecule(mol, confId=conformer_id)
-                #if converged: converged_conformer_id_list.append(conformer_id)
-                if converged: converged_conformer_id_list.append(conformer_id)
-                print(conformer_id, "CONVERGED?", converged)
-                conformer_energy_list[conformer_id] = AllChem.UFFGetMoleculeForceField(mol,confId=conformer_id).CalcEnergy()
-
-            conformers = mol.GetConformers()
-            print("Energy List", conformer_energy_list)
-            print(f"{len(converged_conformer_id_list)} generated TS Conformers CONVERGED out of {len(conformer_id_list)}")
-            #print(f"{converged_conformer_id_list} CONVERGED")
-
-            #for conformer_id in converged_conformer_id_list:
-            for conformer_id in conformer_id_list:
-                conformer = conformers[conformer_id]
-                #energy = conformer_energy_list[conformer_id]
-                Chem.rdmolfiles.MolToXYZFile(mol, f"{conformer_id}.xyz", confId=conformer_id)
-                coordinate_list = []
-                for i in range(n): 
-                    position = conformer.GetAtomPosition(i) 
-                    coordinate_list.append((position[0],position[1],position[2]))
-                    print(position[0], position[1], position[2])
-                if len(coordinate_list) > 0:
-                    coordinate_list = np.array(coordinate_list)
-                    coordinates.append(coordinate_list)
-        elif library == 'babel': 
-            from openbabel import pybel
-            from openbabel import openbabel 
-            import os
-            #### pybel method
-            try:
-                ob_mol = self.get_ob_mol()
-            except:
-                virtual_molecule = self.get_valid_molecule()
-                ob_mol = virtual_molecule.get_ob_mol()
-                use_ic_update = True
-            pybel_mol = pybel.Molecule(ob_mol)
-            for i in range(num_conformer):
-                coordinate_list = []
-                pybel_mol.make3D()
-                pybel_mol.localopt('uff',1000)
-                pybel_atom_list = pybel_mol.atoms
-                #print ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
-                for atom in pybel_atom_list:
-                    position = atom.coords
-                    coordinate_list.append((position[0],position[1],position[2]))
-                    #print (atom.atomicnum,position[0],position[1],position[2])
-                if len(coordinate_list) > 0:
-                    coordinate_list = np.array(coordinate_list)
-                    coordinates.append(coordinate_list)
-        else:
-            print ('Give us algorithm for generating 3D!!!')
-            print ('You can try your own algorithm here!!!')
-            ######### Your own algorithm here #########
-            return None
-        # (TODO): Need to come up with better algorithm, best one is to simply reoptimize with uff
-        # Reupdate molecule
-        '''
-        scale = 1.1 # Make distance to bond length, value between 1.05 ~ 1.2
-        # Repermute coordinates
-        for i in range(len(coordinates)):
-            coordinate_list = coordinates[i]
-            if use_ic_update:
-                internal_coordinates = self.get_bond_list(False)
-                q_updates = dict()
-                radius_list = self.get_radius_list()
-                for bond in internal_coordinates:
-                    delta_d = scale * (radius_list[bond[0]] + radius_list[bond[1]]) - ic.get_distance(coordinate_list,bond[0],bond[1])
-                    if delta_d < -0.15:
-                        q_updates[bond] = delta_d
-                    else:
-                        q_updates[bond] = 0.0
-                #print ('fixed 3d generation', q_updates)
-                updateGood, trj = ic.update_xyz(coordinate_list,q_updates)
-                print("is use_ic_update GOOD?", updateGood)
-                print(trj[-1])
-            coordinates[i] = coordinate_list
-        '''
-        return coordinates
-
-    def sample_conformers(self,n_conformer = 20,library = 'rdkit',rmsd_criteria = 1.0):
-        conformer_list = []
-        coordinates = self.make_3d_coordinates(n_conformer,library)
-        for coordinate_list in coordinates:
-            ace_mol = Molecule((self.get_z_list(),self.get_adj_matrix(),None,self.get_chg_list()))
-            process.locate_molecule(ace_mol,coordinate_list)
-            ace_mol.chg = self.get_chg()
-            conformer_list.append(ace_mol)
-        return conformer_list
-
-    def write_geometry(self,file_directory, option='element',criteria = 1e-4):
-        """
-        Writes xyz file that contains the 3d molecular geometry
-    
-        :param file_directory(str):
-            Directory for saving 3d geometry xyz file
-
-        :return:
-        """
-        atom_list = self.atom_list
-        n = len(atom_list)
-        #f = open(file_directory, 'w')
-        f = open(file_directory, 'a')
-        if True: # If inappropriate geometry condition is determined, it will be added
-            content = str(n)+'\n'            
-            if self.energy is not None:
-                content = content + str(self.energy)+'\n'
-            else:
-                content = content + '\n'
-            f.write(content)
-            for atom in atom_list:
-                f.write(atom.get_content(option,criteria))
-            f.close()
-        else:
-            print ('Wrong geometry!!!')
-
-    def get_content(self,option='element',criteria=1e-4):
-        atom_list = self.atom_list
-        n = len(atom_list)
-        content = str(n)+'\n'            
-        if self.energy is not None:
-            content = content + str(self.energy)+'\n'
-        else:
-            content = content + '\n'
-        for atom in atom_list:
-            content = content + atom.get_content(option,criteria)
-        return content
 
 
 class Intermediate(Molecule):
@@ -1809,14 +1708,12 @@ class Intermediate(Molecule):
         if copy_all:
             # Copy other attributes
             new_intermediate.energy = self.energy
-            new_intermediate.center_of_mass = self.center_of_mass
             new_intermediate.smiles = self.smiles
             new_intermediate.c_eig_list = self.c_eig_list
         return new_intermediate
 
 
     def initialize(self):
-        super().initialize()
         atom_indices_for_each_molecule = self.get_atom_indices_for_each_molecule()
         molecule_list = []
         for atom_indices in atom_indices_for_each_molecule:
@@ -1949,6 +1846,165 @@ class Intermediate(Molecule):
         return coordinates
              
 
+class Conformer:
 
+    def __init__(self,data = None):
+        energy = None
+        if type(data) == str: # Read directory
+            f = open(data,'r')
+            atom_list = []
+            energy = None
+            if data[-4:] == '.xyz':
+                try:
+                    atom_num = int(f.readline())
+                except:
+                    print ('Wrong format! Should start with number of atoms!')
+                try:
+                    energy = float(f.readline())
+                    self.energy = energy
+                except:
+                    a = 1
+                for i in range(atom_num):
+                    try:
+                        content = f.readline().strip()
+                        atom_line = content.split()
+                        #atomic_number = int(atom_line[0])
+                        element_symbol = atom_line[0]
+                        x = float(atom_line[1]) 
+                        y = float(atom_line[2]) 
+                        z = float(atom_line[3])
+                        new_atom = Atom(element_symbol)
+                        new_atom.x = x
+                        new_atom.y = y
+                        new_atom.z = z
+                        atom_list.append(new_atom)
+                    except:
+                        print ('Error found in:',content)
+                        print ('Check the file again:',data)
+                chg = None
+                multiplicity = None
+            else:
+                try:
+                    info = f.readline().strip().split()
+                    chg = int(info[0])
+                    multiplicity = int(info[1])
+                except:
+                    print ('Wrong format! Should start with number of atoms!')
+                while True:
+                    try:
+                        content = f.readline().strip()
+                        atom_line = content.split()
+                        #atomic_number = int(atom_line[0])
+                        element_symbol = atom_line[0]
+                        x = float(atom_line[1]) 
+                        y = float(atom_line[2]) 
+                        z = float(atom_line[3])
+                        new_atom = Atom(element_symbol)
+                        new_atom.x = x
+                        new_atom.y = y
+                        new_atom.z = z
+                        atom_list.append(new_atom)
+                    except:
+                        break
+             
+        elif data is not None:
+            atom_list, chg, multiplicity = data
+        self.atom_list = atom_list
+        self.chg = chg
+        if chg is not None and multiplicity is None:
+            z_sum = sum([atom.get_atomic_number() for atom in atom_list])
+            multiplicity = (z_sum - chg) % 2
+        self.multiplicity = multiplicity
+        self.energy = energy
+
+    def __str__(self):
+        header = f'{self.chg} {self.multiplicity}\n'
+        content = self.get_content()
+        return header + content
+
+
+    def get_coordinate_list(self):
+        coordinate_list = [[atom.x,atom.y,atom.z] for atom in self.atom_list]
+        return np.array(coordinate_list)
+    
+
+    def print_coordinate_list(self,option = 'element'):
+        print (self.get_content(option))
+        
+
+    def get_content(self,option='element',criteria = 1e-4):
+        atom_list = self.atom_list
+        content = ''
+        for atom in atom_list:
+            content += atom.get_content(option,criteria)
+        return content.strip()
+
+
+
+    def get_adj_matrix(self,coeff=1.2):
+        atom_list = self.atom_list
+        n = len(atom_list)
+        radius_list = [atom.get_radius() for atom in atom_list]
+        radius_matrix_flatten = np.repeat(radius_list,n)
+        radius_matrix = radius_matrix_flatten.reshape((n,n))
+        radius_matrix_transpose = np.transpose(radius_matrix)
+        distance_matrix = self.get_distance_matrix()
+        criteria_matrix = coeff * (radius_matrix + radius_matrix_transpose)
+        adj_matrix = np.where(distance_matrix<criteria_matrix,1,0)
+        np.fill_diagonal(adj_matrix,0)
+        return adj_matrix
+
+    def get_distance_between_atoms(self,idx1,idx2):
+        """
+        Returns the distance between chosen two atoms
+
+        :param idx1,idx2(int):
+            indices of chosen two atoms. 
+
+        :return distance(float):
+            Distance between selected two atoms
+
+        """
+        coordinate_list = self.get_coordinate_list()
+        return ic.get_distance(coordinate_list,idx1,idx2)
+
+    def get_angle_between_atoms(self,idx1,idx2,idx3,unit='rad'):
+        """
+        Returns the distance between chosen two atoms
+
+        :param idx1,idx2(int):
+            indices of chosen two atoms. 
+
+        :return distance(float):
+            Distance between selected two atoms
+
+        """
+        coordinate_list = self.get_coordinate_list()
+        angle = ic.get_angle(coordinate_list,idx1,idx2,idx3)
+        if unit == 'degree':
+            angle *= 180/np.pi
+        return angle
+
+
+    def get_dihedral_angle_between_atoms(self,idx1,idx2,idx3,idx4,unit='rad'):
+        coordinate_list = self.get_coordinate_list()
+        angle = ic.get_dihedral_angle(coordinate_list,idx1,idx2,idx3,idx4)
+        if unit == 'degree':
+            angle *= 180/np.pi
+        return angle
+
+
+
+    def get_bo_matrix(self,coeff=1.2):
+        pass
+
+
+    def get_distance_matrix(self):
+        coordinate_list = self.get_coordinate_list()
+        return spatial.distance_matrix(coordinate_list,coordinate_list)
+
+
+    def get_ace_mol(self):
+        pass
 
 

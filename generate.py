@@ -11,13 +11,16 @@ from itertools import combinations
 
 ### extra common libraries ###
 import numpy as np
+from scipy import spatial
 from rdkit import Chem
+from rdkit.Chem import AllChem
+from rdkit import RDLogger
+RDLogger.DisableLog('rdApp.*')
 
 ### ace-reaction libraries ###
 from autoCG import chem
 from autoCG.Calculator import gaussian, orca, rdFF
-from autoCG.stereochemistry import chiral
-from autoCG.utils import arranger, ic, process
+from autoCG.utils import arranger, ic, process, stereo, conformation
 
 
 class GuessGenerator:
@@ -25,33 +28,44 @@ class GuessGenerator:
         self,
         calculator=None,
         ts_scale=1.33,
-        form_scale=1.2,
+        form_scale=1.1,
         break_scale=1.8,
-        step_size=0.15,
+        protect_scale=0.95,
+        max_separation=3.0,
+        step_size=0.10,
         qc_step_size=0.2,
         num_relaxation=3,
     ):
         self.ts_scale = ts_scale
         self.form_scale = form_scale
         self.break_scale = break_scale
+        self.protect_scale = protect_scale
+        self.max_separation = max_separation
         self.step_size = step_size
         self.qc_step_size = qc_step_size
         self.num_step = 30  # May not change ...
         self.use_gurobi = True
         self.num_conformer = 1
         self.num_relaxation = num_relaxation
+        self.scan_num_relaxation = 3
+        self.scan_qc_step_size = 0.2
         self.unit_converter = 627.5095
         self.energy_criteria = 10.0 / self.unit_converter  # 10.0 kcal/mol
         self.library = "rdkit"
         self.save_directory = None
+        self.working_directory = None
         self.uff_optimizer = rdFF.UFFOptimizer()
+        self.preoptimize = True
+        self.maximal_displacement = 0.2
+        self.k = 5
+        self.window = 0.5
+        self.h_content = None
+        self.num_process = 1
         # Check calculator
         if calculator is None:  # Default as Gaussian
-            #'''
             command = "g09"
             calculator = gaussian.Gaussian(command)  # Run with pm6
             # calculator = gaussian.FastGaussian(command,working_directory) # Run with pm6
-            #'''
             # command = 'orca'
             # calculator = orca.Orca(command,working_directory)
         else:
@@ -60,9 +74,10 @@ class GuessGenerator:
                     os.getcwd()
                 )  # Use the final working directory (may be save_directory) as default working directory, it's safe!
         self.calculator = calculator
-        self.considerRS = False
-        self.considerEndoExo = False
-        self.considerEZ = False
+        self.enumerate_stereo = False
+        self.use_crest = False
+        self.check_connectivity = True
+        self.check_stereo = False
 
     def read_option(self, input_directory):
         if not os.path.exists(input_directory):
@@ -219,43 +234,6 @@ class GuessGenerator:
         else:  # Can be implemented later ...
             return None
 
-    def make_constraint(self, molecule, bond, scale):
-        start = bond[0]
-        end = bond[1]
-        atom_list = molecule.atom_list
-        r1 = atom_list[start].get_radius()
-        r2 = atom_list[end].get_radius()
-        d = scale * (r1 + r2)
-        return d
-
-    def scale_bonds(self, molecule, constraints):
-        step_size = self.step_size
-        max_num_step = 0
-        coordinate_list = np.array(molecule.get_coordinate_list())
-        update_q = dict()
-        displacement = 0
-        for constraint in constraints:
-            start = constraint[0]
-            end = constraint[1]
-            delta_d = constraints[constraint] - ic.get_distance(
-                coordinate_list, start, end
-            )
-            update_q[constraint] = delta_d
-            displacement += abs(delta_d)
-            if abs(delta_d) / step_size > max_num_step - 1:
-                max_num_step = int(abs(delta_d) / step_size) + 1
-        # print (update_q)
-        n = len(coordinate_list)
-        for constraint in update_q:
-            update_q[constraint] /= max_num_step
-        displacement /= max_num_step
-        # Now use internal coordinate
-        for i in range(max_num_step):
-            converged = ic.update_geometry(molecule, update_q)
-            if not converged:
-                print("scaling update not converged!!!")
-            # Relax geometry
-
     def find_spectator_molecules(self, reactant, reaction_info):
         # Find participating molecules (Non-participating is removed ...)
         reactant_atom_indices_for_each_molecule = (
@@ -296,7 +274,55 @@ class GuessGenerator:
 
         return reaction_info, mapping_info, spectating_molecules
 
-    def get_ts_like_molecules(self, reactant, reaction_info, n_conformer=1):
+    def get_ts_like_molecules(self, reactant, reaction_info):
+        # Get stereoinformation of reactant (if exists)
+        (
+            potential_atom_indices,
+            potential_bonds,
+        ) = stereo.find_potential_chirals_and_stereo_bonds(reactant)
+        reactant_atom_stereo_infos = dict()
+        reactant_bond_stereo_infos = dict()
+        for atom_index in potential_atom_indices:
+            atom_stereo = stereo.get_atom_stereo(reactant, atom_index)
+            reactant_atom_stereo_infos[atom_index] = atom_stereo
+        for bond in potential_bonds:
+            bond_stereo = stereo.get_bond_stereo(reactant, bond)
+            reactant_bond_stereo_infos[bond] = bond_stereo
+
+        original_z_list = reactant.get_z_list()
+
+        # Divide by fixing stereos and enumerating stereos
+        fixing_atom_stereo_infos = dict()
+        fixing_bond_stereo_infos = dict()
+        enumerating_atom_indices = []
+        enumerating_bonds = []
+
+        print(reactant_atom_stereo_infos, reactant_bond_stereo_infos)        
+
+        # First set fixing atom stereos
+        reaction_participating_indices = []
+        for bond in reaction_info["f"]:
+            start, end = bond
+            if start not in reaction_participating_indices:
+                reaction_participating_indices.append(start)
+            if end not in reaction_participating_indices:
+                reaction_participating_indices.append(end)
+        
+        # Reaction not participating bonds ...
+        for atom_index in reactant_atom_stereo_infos:
+            if atom_index not in reaction_participating_indices:
+                fixing_atom_stereo_infos[atom_index] = reactant_atom_stereo_infos[
+                    atom_index
+                ]
+
+        for bond in reactant_bond_stereo_infos:
+            start, end = bond
+            if (
+                start not in reaction_participating_indices
+                or end not in reaction_participating_indices
+            ):
+                fixing_bond_stereo_infos[bond] = reactant_bond_stereo_infos[bond]
+
         # Get reduced molecule and modify reaction_info with reduced indices
         z_list = np.copy(reactant.get_z_list())
         adj_matrix = np.copy(reactant.get_matrix("adj"))
@@ -304,103 +330,156 @@ class GuessGenerator:
             start, end = bond
             adj_matrix[start][end] += 1
             adj_matrix[end][start] += 1
-        ts_molecule = chem.Molecule([z_list, adj_matrix, None, None])
-        # Modify bo matrix and make hypothetical ts molecule, also sample geometries
-        # print ('aklsdjfalkdjfas',reduced_chg_list)
-
-        # Reset charge if possible ...
-        ts_molecule.chg = reactant.get_chg()
-        # print ('chgchgchg',ts_molecule.chg,ts_molecule.get_chg_list())
-        ts_molecules = ts_molecule.sample_conformers(
-            self.num_conformer, library=self.library
-        )
-
-        if self.considerRS or self.considerEndoExo:
-            reactive_atoms = np.unique(np.array(reaction_info["f"]).flatten())
         
-            print("reactive_atoms: ", reactive_atoms)
-            self.write_log("###### Sample Stereoisomers ######\n")
-            self.write_log(f"Stereochemistry including following atoms will be considered: {reactive_atoms}\n")
+        # Sample one conformer with valid molecule
+        ts_molecule = chem.Molecule([z_list, adj_matrix, None, None])
+        ts_molecule.chg = reactant.get_chg()
+        ts_molecule = ts_molecule.get_valid_molecule()
+        ts_chg_list = ts_molecule.get_chg_list()
+        ts_bo = ts_molecule.get_bo_matrix()
+        ts_molecules = ts_molecule.sample_conformers(1)
+        for ts_molecule in ts_molecules:
+            ts_molecule.bo_matrix = ts_bo
+            ts_molecule.atom_feature['chg'] = ts_chg_list
+
+        # Stereo sampling first, if activated ...
+        if self.enumerate_stereo:
+            final_ts_molecules = []
+            valency_list = np.sum(adj_matrix,axis=1)
+            complex_indices = np.where(valency_list>4)[0].tolist()
+            #print (complex_indices)
+            for ts_molecule in ts_molecules:
+                # Change stereo to reactant
+                ts_molecule = stereo.get_desired_stereoisomer(
+                    ts_molecule, fixing_atom_stereo_infos, fixing_bond_stereo_infos
+                )
+                # Enumerate stereoisomer
+                enumerated_ts_molecules = stereo.enumerate_stereoisomers(
+                    ts_molecule, reaction_participating_indices, enumerating_bonds,complex_indices
+                )
+                final_ts_molecules += enumerated_ts_molecules
+            ts_molecules = final_ts_molecules
+
+        ts_molecules = self.get_no_repeating_molecules(ts_molecules)
+        
+        # Adjust to TS ...
+        for i in range(len(ts_molecules)):
+            self.adjust_to_ts(ts_molecules[i],reaction_info,original_z_list)
+
+        # Perform CREST here ...
+        if self.use_crest:
+            # Perform CREST and re generate RP pairs in CREST folder ...
+            final_ts_molecules = []
+            constraints = reaction_info['b'] + reaction_info['f']
+            for ts_molecule in ts_molecules:
+                #ts_molecule.print_coordinate_list()
+                conformers = conformation.sample_from_crest(ts_molecule,constraints,self.working_directory,self.num_process)
+                #print ('crest conformers',len(conformers))
+                conformers = self.get_no_repeating_molecules(conformers)
+                #for conformer in conformers[:self.num_conformer]:
+                    #print ('1################################')
+                    #print (conformer.energy)
+                    #conformer.print_coordinate_list()
+                final_ts_molecules += conformers[:self.num_conformer]
             
-
-            if self.considerRS:
-                container = []
-                self.write_log("Chirality option is ACTIVE\n")
-                for ts_conformer in ts_molecules:
-                    container += chiral.sampleRS(ts_conformer)
-                ts_molecules += container
-
-            if self.considerEndoExo:
-                container = []
-                self.write_log("Endo/Exo option is ACTIVE\n")
-                for ts_conformer in ts_molecules:
-                    stereo = deepcopy(ts_conformer)
-                    for bond in reaction_info["f"]:
-                        start, end = bond
-                        stereo.adj_matrix[start][end] -= 1
-                        stereo.adj_matrix[end][start] -= 1
-                    chiral.changeEndoExo(stereo, reactive_atoms)
-                    for bond in reaction_info["f"]:
-                        start, end = bond
-                        stereo.adj_matrix[start][end] += 1
-                        stereo.adj_matrix[end][start] += 1
-
-                    container.append(ts_conformer)
-                    container.append(stereo)
-                ts_molecules += container
-            
-            if self.considerEZ:
-                container = []
-                self.write_log("Double Bond E/Z option is ACTIVE\n")
-                for ts_conformer in ts_molecules:
-                    container += chiral.sampleEZ(ts_conformer)
-                ts_molecules += container
+            #random.shuffle(final_ts_molecules)
+            # Remove repeating molecules ... (Almost same energy ...)
+            final_ts_molecules = self.get_no_repeating_molecules(final_ts_molecules)
+            # Sort by conformer energy ...
+            #final_ts_molecules = sorted(final_ts_molecules, key=lambda ts_molecule:ts_molecule.energy)
+            # Gather only stable TS conformers ...           
+            ts_molecules = final_ts_molecules
+        #else:
+        #    # Smiply fixed optimization for ts_molecules
+        #    constraints = ts_molecule.get_bond_list(False)
+        #    for ts_molecule in ts_molecules:
+        #        print ('bf')
+        #        ts_molecule.print_coordinate_list()
+        #        self.calculator.relax_geometry(ts_molecule,constraints,num_relaxation = 100)
+        #        print ('af')
+        #        ts_molecule.print_coordinate_list()
+        print ('Final generated TS structures:',len(ts_molecules))
+        return ts_molecules, reactant_atom_stereo_infos, reactant_bond_stereo_infos
 
 
-        return ts_molecules  # constraint_info for ts_molecule, mapping_info: intermediate to ts_molecule (reduced_idx)
-    
-        """
-        def sample_diastereomers(self, 
-                                ts_conformer: chem.Molecule, 
-                                reactive_atoms):
-            
-            if self.considerRS:
-                return chiral.sampleRS(ts_conformer)
-                #return chiral.sampleRS(ts_conformer, scope=reactive_atoms)
-            
-            if self.considerEndoExo:
-                stereo = deepcopy(ts_conformer)
-                chiral.changeEndoExo(stereo, tuple(reactive_atoms))
-                return [ts_conformer, stereo]
-        """
-        """
-        z_list = ts_conformer.get_z_list()
-        import queue
-        q = queue.SimpleQueue()
-        def prior(adj_matrix:np.ndarray, queue:queue.SimpleQueue, depth:int):
-            center = queue.get()
-
-            if depth > 2:
-                return center
-
-            neighbors = np.where(adj_matrix[center] > 1, 
-                                 adj_matrix[center], 
-                                 -1)
-
-            if np.all(neighbors) == 0:
-                return center
-            
-            p = z_list[neighbors]
-            if not np.all(p == p[0]):
-                return np.argmax(p)
+    def adjust_to_ts(self,molecule,reaction_info,original_z_list):
+        constraints = dict()
+        for bond in molecule.get_bond_list(False):
+            start, end = bond
+            r1 = molecule.atom_list[start].get_radius()
+            r2 = molecule.atom_list[end].get_radius()
+            if bond in reaction_info['b'] + reaction_info['f']:
+                constraints[bond] = (r1+r2) * self.ts_scale
             else:
-                for neighbor in neighbors:
-                    queue.put(x)
-                return prior(adj_matrix, queue, depth+1)
-        """
+                constraints[bond] = (r1+r2) * self.form_scale
+        self.scale_bonds(molecule,constraints)
+        fixing_atoms = []
+        molecule.print_coordinate_list()
+        self.uff_optimizer.optimize_geometry(molecule,constraints,k=2000,add_atom_constraint = False)
+        molecule.print_coordinate_list()
+        for i in range(len(original_z_list)):
+            molecule.atom_list[i].set_atomic_number(int(original_z_list[i]))
 
+    def get_no_repeating_molecules(self,molecules):
+        final_molecules = []
+        window = self.window/627.5095
+        energy_list = []
+        for molecule in molecules:
+            energy = molecule.energy
+            if energy is None:
+                energy = self.calculator.get_energy(molecule)
+                molecule.energy = energy
+            # energy = self.calculator.get_distance_potential(molecule)
+            put_in = True
+            for energy_prime in energy_list:
+                if abs(energy_prime - energy) < window:
+                    put_in = False
+                    break
+            if put_in:
+                energy_list.append(energy)
+                final_molecules.append(molecule)
+        return final_molecules
 
-    def move_to_reactant(self, molecule, formed_bonds, broken_bonds, file_name=None):
+    def scale_bonds(self,molecule,constraints):
+        step_size = self.step_size
+        max_num_step = 0
+        coordinate_list = np.array(molecule.get_coordinate_list())
+        update_q = dict()
+        displacement = 0
+        for constraint in constraints:
+            start = constraint[0]
+            end = constraint[1]
+            delta_d = constraints[constraint] - ic.get_distance(coordinate_list,start,end)
+            update_q[constraint] = delta_d
+            displacement += abs(delta_d)
+            if abs(delta_d)/step_size > max_num_step - 1:
+                max_num_step = int(abs(delta_d)/step_size) + 1
+        #print (update_q)
+        n = len(coordinate_list)
+        for constraint in update_q:
+            update_q[constraint] /= max_num_step
+        displacement /= max_num_step
+        # Now use internal coordinate
+        for i in range(max_num_step):
+            converged = ic.update_geometry(molecule,update_q)
+            if not converged:
+                print ('scaling update not converged!!!')
+            # Relax geometry
+
+    def get_distance_potential(self,molecule):
+        z_list = molecule.get_z_list()
+        coordinate_list = molecule.get_coordinate_list()
+        distance_matrix = spatial.distance_matrix(coordinate_list,coordinate_list)
+        distance_matrix = np.where(distance_matrix<5,distance_matrix,0) # Only consider near by 2 or 3
+        n = len(z_list)
+        p = 2
+        inverse_distance_matrix = np.where(distance_matrix>0,distance_matrix**p,0)
+        for i in range(n):
+            inverse_distance_matrix[i,:] *= z_list[i]
+            inverse_distance_matrix[:,i] *= z_list[i]
+        return np.sum(inverse_distance_matrix)
+
+    def move_to_minima(self, molecule, formed_bonds, broken_bonds, file_name=None):
         step_size = self.step_size
         coordinate_list = molecule.get_coordinate_list()
         n = len(molecule.atom_list)
@@ -409,35 +488,57 @@ class GuessGenerator:
         # total_bonds = broken_bonds + formed_bonds # Must fix broken bonds
         total_bonds = molecule.get_bond_list(False)
         # print ('total bonds: ',total_bonds)
-        update_q = dict()
         check_increase = False
         undesired_bonds = []
         self.write_optimization(molecule, file_name, "w")
-        for i in range(self.num_step):
-            update_q = dict()
-            for bond in total_bonds:
-                if bond in formed_bonds:
-                    start, end = bond
-                    d = molecule.get_distance_between_atoms(start, end)
-                    r1 = molecule.atom_list[start].get_radius()
-                    r2 = molecule.atom_list[end].get_radius()
-                    delta = d - (r1 + r2) * self.form_scale
-                    if delta > 0:
-                        update_q[bond] = -min(step_size, delta)
-                    else:
-                        update_q[bond] = 0.0
-                elif bond in broken_bonds:
-                    start, end = bond
-                    d = molecule.get_distance_between_atoms(start, end)
-                    r1 = molecule.atom_list[start].get_radius()
-                    r2 = molecule.atom_list[end].get_radius()
-                    delta = (r1 + r2) * self.break_scale - d
-                    if delta > 0:
-                        update_q[bond] = min(step_size, delta)
-                    else:
-                        update_q[bond] = 0.0
-                else:
-                    update_q[bond] = 0.0
+        status_q = dict()
+        num_step = 0
+        for bond in formed_bonds:
+            start, end = bond
+            d = molecule.get_distance_between_atoms(start, end)
+            r1 = molecule.atom_list[start].get_radius()
+            r2 = molecule.atom_list[end].get_radius()
+            target_d = (r1 + r2) * self.form_scale
+            if d - target_d < 0:
+                status_q[bond] = 0.0
+            else:
+                status_q[bond] = d - target_d
+        max_distance = -1.0
+        for bond in broken_bonds:
+            start, end = bond
+            d = molecule.get_distance_between_atoms(start, end)
+            r1 = molecule.atom_list[start].get_radius()
+            r2 = molecule.atom_list[end].get_radius()
+            target_d = (r1 + r2) * self.break_scale
+            status_q[bond] = d
+            if target_d > max_distance:
+                max_distance = target_d
+
+        for bond in broken_bonds:
+            d = status_q[bond] 
+            if max_distance < d:
+                status_q[bond] = 0.0
+            else:
+                status_q[bond] = max_distance - d
+
+        for bond in status_q:
+            if num_step < int(status_q[bond] / step_size) + 1:
+                num_step = int(status_q[bond] / step_size) + 1
+
+        if num_step == 0:
+            return
+        # Determine num_step
+        update_q = dict()
+        for bond in total_bonds:
+            if bond in formed_bonds:
+                start, end = bond
+                update_q[bond] = -status_q[bond] / num_step
+            elif bond in broken_bonds:
+                start, end = bond
+                update_q[bond] = status_q[bond] / num_step
+            else:
+                update_q[bond] = 0.0
+        for i in range(num_step):
             update = sum([abs(value) for value in list(update_q.values())])
             if update < 0.0001:  # If nothing to update ...
                 print("No more coordinate to update ...")
@@ -445,54 +546,47 @@ class GuessGenerator:
             # print (f'{i+1}th geometry ...')
             # molecule.print_coordinate_list()
             converged = ic.update_geometry(molecule, update_q)
+            if not converged:
+                break
+            # For the case when constraints are less than possible total constraints
             if n * (n - 1) / 2 > len(update_q):
-                self.calculator.relax_geometry(
+                self.calculator.relax_geometry_steep(
                     molecule,
                     update_q,
-                    None,
-                    None,
-                    "test",
-                    self.num_relaxation,
-                    self.step_size,
+                    chg=None,
+                    multiplicity=None,
+                    file_name="relax",
+                    num_relaxation=self.scan_num_relaxation,
+                    maximal_displacement=self.scan_qc_step_size,
                 )
             self.write_optimization(molecule, file_name, "a")
-    
-    def move_to_reactant_modified(self, molecule,broken_bonds):
-        # First, adjust bond lengths for broken bonds ...
-        #molecule.print_coordinate_list()
-        bond_list = molecule.get_bond_list(False)
-        update_q = dict()
-        n = 10
-        for bond in bond_list:
-            update_q[bond] = 0.0
-        for bond in broken_bonds:
-            start, end = bond
-            d =  molecule.get_distance_between_atoms(start,end)
-            r1 = molecule.atom_list[start].get_radius()
-            r2 = molecule.atom_list[end].get_radius()
-            target_d = (r1+r2) * self.break_scale
-            delta = target_d - d
-            if delta > 0:
-                update_q[bond] = delta/n
-                         
-        for i in range(n):
-            ic.update_geometry(molecule,update_q)
-            self.uff_optimizer.optimize_geometry(molecule,5)
-         
-        #print ('after move')
-        # From the starting geometry, move optimize using UFF 
-        #molecule.print_coordinate_list()
-        self.uff_optimizer.optimize_geometry(molecule)
 
-        #molecule.print_coordinate_list() 
-
-        pass        
+    def uff_optimization(self, reactant, constraints=[],k=None, file_name=None):
+        original_reactant = reactant.copy()  # Geometry exists ...
+        # First optimize molecules ...
+        self.write_optimization(reactant, file_name, "w")
+        #AllChem.GetUFFBondStretchParams(original_mol, 1, 2)
+        maximal_displacement = self.maximal_displacement
+        original_coordinate = reactant.get_coordinate_list()
+        if k is None:
+            k = self.k
+        #self.uff_optimizer.optimize_geometry(reactant, constraints, maximal_displacement, k) This also works well !!!
+        self.uff_optimizer.optimize_geometry(reactant, [], maximal_displacement, k,True)
+        if not process.check_geometry(reactant.get_coordinate_list()):
+            print ('UFF optimization not sucessful!!!')
+            print ('Loading original geometry ...')
+            process.locate_molecule(reactant,original_coordinate)
+        reactant.energy = self.calculator.get_energy(reactant)
+        self.write_optimization(reactant, file_name, "a")
 
     def relax_geometry(self, reactant, constraints, file_name=None):
         energy_list = [self.calculator.get_energy(reactant)]
         self.write_optimization(reactant, file_name, "w")
+        old_content = self.calculator.content
+        if h_content is not None:
+            self.calculator.content = self.h_content
         for i in range(self.num_step):
-            self.calculator.relax_geometry(
+            self.calculator.relax_geometry_steep(
                 reactant,
                 constraints,
                 None,
@@ -504,16 +598,151 @@ class GuessGenerator:
             self.write_optimization(reactant, file_name, "a")
             energy_list.append(reactant.energy)
             if energy_list[-1] - energy_list[-2] > -self.energy_criteria:
+                print(
+                    f"E criteria MET: \u0394E = {energy_list[-1] - energy_list[-2]} hartree"
+                )
                 break
-            reactant.print_coordinate_list()
+            # print ('After optimization ...')
+            # reactant.print_coordinate_list()
+        self.calculator.content = old_content
         # print ('#### Optimized geometry ####')
         # reactant.print_coordinate_list()
-    
-    def relax_geometry_modified(self, molecule):
-        assert isinstance(self.calculator, rdFF.UFFOptimizer)
 
-        for i in range(self.num_step):
-            self.calculator.optimize_geometry(molecule, max_cycles=self.num_relaxation, e_tol=self.energy_criteria)
+    def identify_connectivity(self,optimized_r, reactant, optimized_p, product):
+        matching_result = [True, True]
+        matching_result[0], coeff = process.is_same_connectivity(
+            reactant, optimized_r
+        )
+        # print (reduced_reactant.get_smiles('ace'))
+        if product is not None:
+            matching_result[1], coeff = process.is_same_connectivity(
+                product, optimized_p
+            )
+        return matching_result
+
+    def check_stereochemistry(self,reactant,reactant_atom_stereo_infos, reactant_bond_stereo_infos):
+        # Check stereo result
+        stereo_result = [True, True]
+        for atom_index in reactant_atom_stereo_infos:
+            final_atom_stereo_info = stereo.get_atom_stereo(
+                reactant, atom_index
+            )
+            if final_atom_stereo_info * reactant_atom_stereo_infos[atom_index] < 0:
+                stereo_result[0] = False
+                break
+        for bond in reactant_bond_stereo_infos:
+            final_bond_stereo_info = stereo.get_bond_stereo(
+                reactant, bond
+            )
+            if final_bond_stereo_info * reactant_bond_stereo_infos[bond] < 0:
+                stereo_result[1] = False
+                break
+        return stereo_result
+
+    def generate_RP_pair(self,ts_molecule,reaction_info=None,chg=None,multiplicity=None,save_directory=None,working_directory=None):
+        # Write guess log for each directory
+        st = datetime.datetime.now()
+        old_save_directory = self.save_directory
+        
+
+        # Log changed into the specific folder directory
+        if save_directory is not None:
+            os.system(f"mkdir -p {save_directory}")
+            self.save_directory = save_directory
+
+        self.write_geometry(ts_molecule,'initial_ts','xyz')
+
+        self.calculator.clean_scratch()
+        sd = self.save_directory
+        print ('Starting generation ...')
+        if True:
+            reactant_molecules = ts_molecule.copy()
+            reactant_molecules.energy = ts_molecule.energy
+            product_molecules = ts_molecule.copy()
+            product_molecules.energy = ts_molecule.energy
+            if chg is not None:
+                reactant_molecules.chg = chg
+                product_molecules.chg = chg
+            if multiplicity is not None:
+                reactant_molecules.multiplicity = multiplicity
+                product_molecules.multiplicity = multiplicity
+            print ('moving to R ...')
+            formed_bonds = reaction_info["f"]
+            broken_bonds = reaction_info["b"]
+            self.move_to_minima(
+                reactant_molecules, broken_bonds, formed_bonds, "TS_to_R.xyz"
+            )  # New module for finding reactant complex
+            # reactant_molecules.print_coordinate_list()
+
+            # Modify connectivity
+            adj_matrix = reactant_molecules.get_adj_matrix()
+            for bond in formed_bonds:
+                start, end = bond
+                adj_matrix[start][end] -= 1
+                adj_matrix[end][start] -= 1
+            reactant_molecules.adj_matrix = adj_matrix
+            r_chg_list, r_bo = process.get_chg_list_and_bo_matrix_from_adj_matrix(
+                reactant_molecules, chg
+            )
+            reactant_molecules.bo_matrix = r_bo
+            reactant_molecules.atom_feature["chg"] = r_chg_list
+            # Preoptimize with uff
+            if self.preoptimize:
+                self.uff_optimization(reactant_molecules, formed_bonds, file_name="UFF_R.xyz")
+
+            print("###### R optimization #####")
+            self.relax_geometry(reactant_molecules, [], "opt_R.xyz")
+            # self.relax_geometry(reactant_molecules, formed_bonds, "opt_R.xyz")
+            print("R optimization finished !!!")
+            # reactant_molecules.print_coordinate_list()
+            self.write_geometry(reactant_molecules, "R", "xyz")
+            self.write_geometry(reactant_molecules, "R", "com")
+            self.calculator.clean_scratch()
+            print ('moving to P ...')
+            # print (formed_bonds,broken_bonds)
+            self.move_to_minima(
+                product_molecules, formed_bonds, broken_bonds, "TS_to_P.xyz"
+            )
+            adj_matrix = product_molecules.get_adj_matrix()
+            for bond in broken_bonds:
+                start, end = bond
+                adj_matrix[start][end] -= 1
+                adj_matrix[end][start] -= 1
+            product_molecules.adj_matrix = adj_matrix
+            p_chg_list, p_bo = process.get_chg_list_and_bo_matrix_from_adj_matrix(
+                product_molecules, chg
+            )
+            
+            product_molecules.bo_matrix = p_bo
+            product_molecules.atom_feature["chg"] = p_chg_list
+            if self.preoptimize:
+                self.uff_optimization(product_molecules, broken_bonds, file_name="UFF_P.xyz")
+
+            undesired_bonds = []
+            # print ('P geometry ...')
+            # product_molecules.print_coordinate_list()
+            print("###### P optimization #####")
+            # self.separated_reactant_optimization(product_molecules,
+            self.relax_geometry(product_molecules, [], "opt_P.xyz")
+            # self.relax_geometry(product_molecules, broken_bonds, "opt_P.xyz")
+            print("P optimization finished !!!")
+            self.write_geometry(product_molecules, "P", "xyz")
+            self.write_geometry(product_molecules, "P", "com")
+            self.calculator.clean_scratch()
+
+            reactant_molecules.adj_matrix = None
+            reactant_molecules.bo_matrix = None
+            product_molecules.adj_matrix = None
+            product_molecules.bo_matrix = None
+            self.save_directory = old_save_directory
+            return reactant_molecules, product_molecules
+        # Marking ...
+        else:
+            self.write_log(f"{i+1}th RP structure generation failed ...\n")
+            print (f'Generation failed ... Skiped for {i+1}th trial')
+            self.save_directory = old_save_directory
+            return None, None
+           
 
     def get_oriented_RPs(
         self,
@@ -523,8 +752,8 @@ class GuessGenerator:
         chg=None,
         multiplicity=None,
         save_directory=None,
+        working_directory=None,
     ):
-        working_directory = None
         # Check save_directory
         if type(save_directory) is str:
             if not os.path.exists(save_directory):
@@ -532,15 +761,16 @@ class GuessGenerator:
                 if not os.path.exists(save_directory):
                     print("Path does not exist! Guess is generated without log file!")
                     save_directory = None
-                else:
-                    working_directory = save_directory
-            else:
-                working_directory = save_directory
+        if working_directory is None or not os.path.exists(working_directory):
+            working_directory = save_directory
         if working_directory is not None:
             if self.calculator.working_directory == os.getcwd():
                 self.calculator.change_working_directory(working_directory)
-        self.save_directory = save_directory
+            os.system(f'mkdir -p {working_directory}')
+            old_working_directory = self.working_directory
+            self.working_directory = working_directory
 
+        self.save_directory = save_directory
         starttime = datetime.datetime.now()
         self.write_log(f"##### Guess generator info #####\n", "w")
         # Parameter directly related to precomplexes
@@ -564,8 +794,23 @@ class GuessGenerator:
         self.write_log(f"Starting time: {starttime}\n\n")
         self.write_log(f"All guesses will be saved in {self.save_directory}\n")
 
+        # Check reaction_info
+        bond_breaks = reaction_info['b']
+        adj_matrix = reactant.get_adj_matrix()
+        for bond in bond_breaks:
+            s, e = bond
+            if adj_matrix[s][e] == 0:
+                print ('Wrong reaction info is given !!!')
+                print ('Check the input again !!!')
+                exit()
+
         if reaction_info is None:
             self.write_log("Finding reaction information with gurobi!\n")
+            if reactant is None or product is None:
+                print(
+                    "Reaction information is not sufficient !!! Cannot make good R/P conformation !!!"
+                )
+                exit()
             reaction_info = self.get_reaction_info(reactant, product)
             if reaction_info is None:
                 self.write_log(
@@ -574,7 +819,6 @@ class GuessGenerator:
                 exit()
         else:
             self.write_log("Using the provided reaction!\n")
-
         reactant_copy = reactant.copy()
         if chg is not None:
             reactant_copy.chg = chg
@@ -582,8 +826,7 @@ class GuessGenerator:
             reactant_copy.multiplicity = multiplicity
         # Need to write reaction information here!
         self.write_log(f"####### Final reaction information #######\n")
-        bond_form = reaction_info["f"]
-        bond_break = reaction_info["b"]
+
         print("reaction info:", reaction_info)
         try:
             self.write_log(
@@ -593,8 +836,8 @@ class GuessGenerator:
             self.write_log("reaction SMILES cannot be generated !!!\n")
 
         # self.write_log(f'reaction SMILES: {reactant.get_smiles("ace")}>>{product.get_smiles("ace")}\n')
-        self.write_log(f"bond form: {bond_form}\n")
-        self.write_log(f"bond dissociation: {bond_break}\n\n")
+        self.write_log(f"bond form: {reaction_info['f']}\n")
+        self.write_log(f"bond dissociation: {reaction_info['b']}\n\n")
         # Mapped reaction_info (reduced), to reconstruct original, use mapping_info!
         self.write_log("Start to get ts-like molecules.\n")
         st = datetime.datetime.now()
@@ -619,9 +862,14 @@ class GuessGenerator:
                 reduced_product = None
 
         # Check total charge of reduced_reactant
-        ts_molecules = self.get_ts_like_molecules(reduced_reactant, reaction_info)
-        #ts_molecules = ts_molecules[1:] #### MUST BE DELETED!!!!
-        # exit()
+        (
+            ts_molecules,
+            reactant_atom_stereo_infos,
+            reactant_bond_stereo_infos,
+        ) = self.get_ts_like_molecules(reduced_reactant, reaction_info)
+        print(reactant_bond_stereo_infos)
+        print(len(ts_molecules))
+
         et = datetime.datetime.now()
         self.write_log(
             f"[{et}] {len(ts_molecules)} ts conformers generated... Taken time: {et-st}\n\n"
@@ -629,29 +877,15 @@ class GuessGenerator:
         # Note that ts_molecules only contain atoms of molecules that are participating in the reaction
         # Relax ts_molecules with constraints
         energy_list = []
-        ts_constraints = dict()
         if len(ts_molecules) == 0:
             print("No conformer generated !!!")
             return [], reaction_info, mapping_info, []
-
+        
         molecule = ts_molecules[0]
         # Build constraints for ts optimization
         atom_list = ts_molecules[0].atom_list
-        n = len(ts_molecules)
         bond_list = molecule.get_bond_list(False)
-        for bond in bond_list:
-            if bond in reaction_info["f"]:
-                ts_constraints[bond] = self.make_constraint(
-                    molecule, bond, self.ts_scale
-                )
-            elif bond in reaction_info["b"]:
-                ts_constraints[bond] = self.make_constraint(
-                    molecule, bond, self.ts_scale
-                )
-            else:
-                ts_constraints[bond] = self.make_constraint(molecule, bond, 1.0)
         self.write_log("Set up done!!!\n")
-        print("n:", n)
         if chg is None:
             chg = molecule.chg
             if chg is None:
@@ -664,188 +898,81 @@ class GuessGenerator:
         if multiplicity is not None:
             reactant_copy.multiplicity = multiplicity
 
-        # current_directory = os.getcwd()
-        # self.write_log('Relaxing TS structures ...\n\n')
-        for i in range(n):
-            # Write guess log for each directory
-            # print (ts_constraints)
-            ts_molecule = ts_molecules[i]
-            #self.scale_bonds(ts_molecule, ts_constraints)
-            # self.save_geometry(ts_molecules[i],i,'relaxed_ts','xyz')
-            st = datetime.datetime.now()
-            save_directory = self.save_directory
-            # Log changed into the specific folder directory
-            save_directory = self.save_directory
-            if save_directory is not None:
-                folder_directory = os.path.join(save_directory, str(i + 1))
-                name = f"guess_{i+1}"
-                os.system(f"mkdir -p {folder_directory}")
-                self.save_directory = folder_directory
-
-            folder_directory = os.path.join(save_directory, str(i + 1))
-            name = f"guess_{i+1}"
-            os.system(f"mkdir -p {folder_directory}")
-            self.write_log(
-                f"Start geometry optimization for {i+1}th guess of TS structure.\n"
-            )
-            # Log changed into the specific folder directory
-            self.save_directory = folder_directory
-            self.write_log(
-                f"{i+1}th Initial guess generation\n\nInitial\n{self.get_geometry(ts_molecules[i])}",
-                file_name=name,
-                mode="w",
-            )
-            # Repeat relaxation and separating bonds
-            undesired_bonds = []
-            formed_bonds = reaction_info["f"]
-            broken_bonds = reaction_info["b"]
-            self.write_geometry(ts_molecule, "initial_ts", "xyz")
-            self.write_log(
-                f"\nFinal\n{self.get_geometry(ts_molecule)}\n", file_name=name
-            )
-            et = datetime.datetime.now()
-            # Move to original guess geometry
-            self.save_directory = save_directory
-            energy_list.append(ts_molecules[i].energy)
-            self.calculator.clean_scratch()
-        # os.chdir(current_directory)
-        self.write_log("TS generation finished!!! \n\n")
-        #print("Energy: ", energy_list)
-        # May filter some ts_molecules using the energy information
+        current_directory = os.getcwd()
+        original_z_list = reactant.get_z_list()
+        n = len(ts_molecules)
+        print("n:", n)
         reactant_product_pairs = []
         matching_results = []
-        n = len(ts_molecules)
+        stereo_results = []
         for i in range(n):
-            self.write_log(f"Finding RP pair for {i+1}th TS structure.\n")
-            # Move save_directory
-            save_directory = self.save_directory
+            # Write guess log for each directory
+            ts_molecule = ts_molecules[i].copy()
+            #self.adjust_to_ts(ts_molecule,reaction_info,original_z_list)
+            st = datetime.datetime.now()
+            # Log changed into the specific folder directory
             if save_directory is not None:
-                folder_directory = os.path.join(save_directory, str(i + 1))
-                self.save_directory = folder_directory
-            name = f"guess_{i+1}"
-            ts_molecule = ts_molecules[i]
-            # Set new constraints from the reaction information
-            reactant_molecules = ts_molecule.copy()
-            reactant_molecules.energy = ts_molecule.energy
-            product_molecules = ts_molecule.copy()
-            product_molecules.energy = ts_molecule.energy
-            # print ('bf',reactant_molecules.chg,product_molecules.chg,ts_molecule.chg)
-            if chg is not None:
-                reactant_molecules.chg = chg
-                product_molecules.chg = chg
-            if multiplicity is not None:
-                reactant_molecules.multiplicity = multiplicity
-                product_molecules.multiplicity = multiplicity
+                new_save_directory = os.path.join(save_directory, str(i + 1))
+                os.system(f"mkdir -p {new_save_directory}")
+            else:
+                new_save_directory = None
             
-            # Modify connectivity
-            for bond in formed_bonds:
-                start,end = bond
-                reactant_molecules.adj_matrix[start][end] -= 1
-                reactant_molecules.adj_matrix[end][start] -= 1
-            r_chg_list, r_bo = process.get_chg_list_and_bo_matrix_from_adj_matrix(reactant_molecules, chg)
-            reactant_molecules.bo_matrix = r_bo
-            reactant_molecules.atom_feature["chg"] = r_chg_list
-            for bond in broken_bonds:
-                start,end = bond
-                product_molecules.adj_matrix[start][end] -= 1
-                product_molecules.adj_matrix[end][start] -= 1
-            p_chg_list, p_bo = process.get_chg_list_and_bo_matrix_from_adj_matrix(product_molecules, chg)
-            product_molecules.bo_matrix = p_bo
-            product_molecules.atom_feature["chg"] = p_chg_list
-
-            self.write_log(f"{i+1}th structure moving to R ...\n", file_name=name)
-            # print ('moving to R ...')
-            #self.move_to_reactant(
-            #    reactant_molecules, broken_bonds, formed_bonds, "TS_to_R.xyz"
-            #)  # New module for finding reactant complex
-            self.move_to_reactant_modified(reactant_molecules,formed_bonds)
-            undesired_bonds = []
-            # print ('R geometry ...')
-            # reactant_molecules.print_coordinate_list()
-            #
-            print("###### R optimization #####")
-            self.relax_geometry(reactant_molecules, [], "opt_R.xyz")
-            #self.relax_geometry_modified(reactant_molecules)
-            print("R optimization finished !!!")
-            # reactant_molecules.print_coordinate_list()
-            self.write_geometry(reactant_molecules, "R", "xyz")
-            self.write_geometry(reactant_molecules, "R", "com")
-            self.write_log(f"{i+1}th structure moving to P ...\n", file_name=name)
-            self.calculator.clean_scratch()
-            # print ('moving to P ...')
-            # print (formed_bonds,broken_bonds)
-            self.move_to_reactant_modified(product_molecules,broken_bonds) 
-            #self.move_to_reactant(
-            #    product_molecules, formed_bonds, broken_bonds, "TS_to_P.xyz"
-            #)
-            # self.calculator.optimize_geometry(molecule=product_molecules,constraints=reaction_info['b'],chg=chg,multiplicity=multiplicity,file_name='product',extra='(modredundant,maxcycles=10) Symmetry=None')
-            #'''
-            undesired_bonds = []
-            # print ('P geometry ...')
-            # product_molecules.print_coordinate_list()
-            print("###### P optimization #####")
-            # self.separated_reactant_optimization(product_molecules,
-            self.relax_geometry(product_molecules, [], "opt_P.xyz")
-            #self.relax_geometry_modified(product_molecules)
-            print("P optimization finished !!!")
-            self.write_geometry(product_molecules, "P", "xyz")
-            self.write_geometry(product_molecules, "P", "com")
-
-            reactant_molecules.adj_matrix = None
-            reactant_molecules.bo_matrix = None
-            product_molecules.adj_matrix = None
-            product_molecules.bo_matrix = None
-
-            RP_pair = (reactant_molecules, product_molecules)
-            reactant_product_pairs.append(RP_pair)
-            self.calculator.clean_scratch()
-
-            # Back to original ...
-            self.save_directory = save_directory
-            self.write_log(
-                f"[{datetime.datetime.now()}] {i+1}th reactant-product pair well created !!!\n"
-            )
-            matching_result = [True, True]
-            # print ('Checking R connectivity ... ')
-            # print (reduced_reactant.get_chg())
-            # print (reduced_reactant.get_adj_matrix())
-            matching_result[0], coeff = process.is_same_connectivity(
-                reduced_reactant, reactant_molecules
-            )
-            # print (reduced_reactant.get_smiles('ace'))
-            if reduced_product is not None:
-                # print ('Checking P connectivity ...')
-                matching_result[1], coeff = process.is_same_connectivity(
-                    reduced_product, product_molecules
-                )
-            if matching_result[0]:
-                # print ('Well matching R generated !!!')
-                content = f"{i+1}th reactant well matches with the original one!\n"
+            if True:
+                reactant_molecules, product_molecules = self.generate_RP_pair(ts_molecule,reaction_info,chg,multiplicity,new_save_directory,working_directory)
+                self.calculator.clean_scratch()
+                matching_result = self.identify_connectivity(reactant_molecules, reduced_reactant, product_molecules, reduced_product)
+                reactant_molecules.bo_matrix = reduced_reactant.bo_matrix
+                stereo_result = self.check_stereochemistry(reactant_molecules,reactant_atom_stereo_infos, reactant_bond_stereo_infos)
             else:
-                # print ('Well matching R not found !!!')
-                content = f"{i+1}th reactant does not match with the original one!\n"
-            self.write_log(content)
-            if matching_result[1]:
-                # print ('Well matching P generated !!!')
-                content = f"{i+1}th product well matches with the original one!\n\n"
-            else:
-                # print ('Well matching P not found !!!')
-                content = f"{i+1}th product does not match with the original one!\n\n"
-            self.write_log(content)
+                matching_result = [False, False]
+                stereo_result = [False, False]
+                self.save_directory = save_directory
+                self.write_log(f"{i+1}th RP structure generation failed ...\n")
+                print (f'Generation failed ... Skiped for {i+1}th trial')
+                reactant_molecules = None
+                product_molecules = None
+
+            reactant_product_pairs.append((reactant_molecules,product_molecules))            
             matching_results.append(matching_result)
-            # print (matching_result,matching_results)
-            print("af", reactant_molecules.chg, product_molecules.chg)
-        # Save info in the save directory
-        print(matching_results)
-        self.save_result(reaction_info, mapping_info, matching_results)
+            stereo_results.append(stereo_result)
+            print(matching_result, stereo_result)
+        
+        print("matching results:", matching_results)
+        print("stereo results:", stereo_results)
+        # self.save_result(reaction_info, mapping_info, matching_results)
+        stereo_matching_indices = []
+        connectivity_matching_indices = []
+        # Get indices that both are resulted in matched
+        if self.check_connectivity:
+            for i, matching_result in enumerate(matching_results):
+                if not matching_result[0] or not matching_result[1]:
+                    continue
+                connectivity_matching_indices.append(i)
+        else:
+            connectivity_matching_indices = list(range(len(matching_results)))
+        if self.check_stereo:
+            for i, stereo_result in enumerate(stereo_results):
+                stereo_result = stereo_results[i]
+                if stereo_result[0] and stereo_result[1]:
+                    stereo_matching_indices.append(i)
+        else:
+            stereo_matching_indices = list(range(len(matching_results)))
+        print ('check',connectivity_matching_indices, stereo_matching_indices)
+        indices = list(set(connectivity_matching_indices) & set(stereo_matching_indices))
+        indices.sort()
+        printing_indices = [str(i+1) for i in indices]
 
+        print("good conformers:", printing_indices)
+        content = ",".join(printing_indices)
+        self.write_log(
+            f"Conformer idx: {content} are expected to be good conformers !!!\n"
+        )
         # All molecules here, are in ts connectivity matrix!!! To reset, need to remove bonds using reaction_info
         endtime = datetime.datetime.now()
-        self.write_log(
-            f"[{endtime}] Total {endtime-starttime} was taken for making {n} RP pairs.\n"
-        )
+        
+        # Reset working and save directory
         self.save_directory = None
-
+        self.working_directory = old_working_directory
         return (
             reactant_product_pairs,
             reaction_info,
@@ -854,11 +981,18 @@ class GuessGenerator:
         )  # Reduced indices for reaction_info
 
     def get_oriented_RPs_from_smiles(
-        self, reaction_smiles, chg=None, multiplicity=None, save_directory=None
+        self,
+        reaction_smiles,
+        chg=None,
+        multiplicity=None,
+        save_directory=None,
+        working_directory=None,
     ):
         smiles_list = reaction_smiles.split(">>")
         reactant_smiles = smiles_list[0]
         product_smiles = smiles_list[1]
+        # Reactant must have geometry ...
+        # rd_reactant = Chem.MolFromSmiles(reactant_smiles)
         reactant = chem.Intermediate(reactant_smiles)
         product = chem.Intermediate(product_smiles)
         return self.get_oriented_RPs(
@@ -868,19 +1002,26 @@ class GuessGenerator:
             chg=chg,
             multiplicity=multiplicity,
             save_directory=save_directory,
+            working_directory=working_directory,
         )
 
     def get_oriented_RPs_from_geometry(
-        self, input_directory, chg=None, multiplicity=None, save_directory=None
+        self,
+        input_directory,
+        chg=None,
+        multiplicity=None,
+        save_directory=None,
+        working_directory=None,
     ):
         # Input directory: name.com, coordinates
         reaction_info = dict()
         reaction_info["f"] = []
         reaction_info["b"] = []
         atom_list = []
-        reactant = chem.Intermediate()
+        name = "R"
         with open(input_directory) as f:
             # Read chg, multiplicity
+            # name = f.readline().strip()
             chg, multiplicity = f.readline().strip().split()
             chg = int(chg)
             multiplicity = int(multiplicity)
@@ -901,7 +1042,7 @@ class GuessGenerator:
             while True:
                 line = f.readline()
                 try:
-                    coordinate_info = line.strip().split(" ")
+                    coordinate_info = line.strip().split()
                     start = int(coordinate_info[0]) - 1
                     end = int(coordinate_info[1]) - 1
                     reaction_type = coordinate_info[2].lower()  # b or f
@@ -911,8 +1052,12 @@ class GuessGenerator:
                     reaction_info[reaction_type].append(bond)
                 except:
                     break
-        reactant.atom_list = atom_list
-        reactant.adj_matrix = process.get_adj_matrix_from_distance(reactant, 1.2)
+        if name == "R":
+            reactant = chem.Intermediate()
+            reactant.atom_list = atom_list
+            reactant.adj_matrix = process.get_adj_matrix_from_distance(reactant, 1.2)
+            reactant.chg = chg
+            reactant.sanitize()
         return self.get_oriented_RPs(
             reactant,
             None,
@@ -920,17 +1065,26 @@ class GuessGenerator:
             chg=chg,
             multiplicity=multiplicity,
             save_directory=save_directory,
+            working_directory=working_directory,
         )
 
 
 if __name__ == "__main__":
+    sys.stdout = sys.__stdout__
+    print("hihihi", os.getcwd())
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", "-i", type=str, help="Input directory for reaction")
     parser.add_argument(
         "--save_directory",
         "-sd",
         type=str,
         help="save directory for precomplex",
+        default=None,
+    )
+    parser.add_argument(
+        "--working_directory",
+        "-wd",
+        type=str,
+        help="working directory for QC",
         default=None,
     )
     parser.add_argument(
@@ -952,15 +1106,23 @@ if __name__ == "__main__":
         "-nc",
         type=int,
         help="Number of precomplex conformations",
-        default=1,
+        default=3,
+    )
+    parser.add_argument(
+        "--scan_num_relaxation",
+        "-snr",
+        type=int,
+        help="Number of relaxation during each scan",
+        default=3,
     )
     parser.add_argument(
         "--num_relaxation",
         "-nr",
         type=int,
         help="Number of relaxation during each scan",
-        default=3,
+        default=7,
     )
+
     parser.add_argument(
         "--ts_scale",
         "-ts",
@@ -973,7 +1135,7 @@ if __name__ == "__main__":
         "-fs",
         type=float,
         help="Scaling factor for bond formation",
-        default=1.2,
+        default=1.1,
     )
     parser.add_argument(
         "--break_scale",
@@ -982,6 +1144,28 @@ if __name__ == "__main__":
         help="Scaling factor for bond dissociation",
         default=1.8,
     )
+    parser.add_argument(
+        "--num_process",
+        "-np",
+        type=int,
+        help="Number of cores ",
+        default=1,
+    )
+    parser.add_argument(
+        "--protect_scale",
+        "-ps",
+        type=float,
+        help="Scaling factor for protecting existing bonds",
+        default=0.90,
+    )
+    parser.add_argument(
+        "--max_separation",
+        "-ms",
+        type=float,
+        help="Maximal distance separation for bond dissociation",
+        default=3.0,
+    )
+
     parser.add_argument(
         "--step_size",
         "-s",
@@ -994,8 +1178,16 @@ if __name__ == "__main__":
         "-qc",
         type=float,
         help="Maximal displacement change during QC calculation",
-        default=0.25,
+        default=0.10,
     )
+    parser.add_argument(
+        "--scan_qc_step_size",
+        "-sqc",
+        type=float,
+        help="Number of relaxation during each scan",
+        default=0.1,
+    )
+
     parser.add_argument(
         "--energy_criteria",
         "-ec",
@@ -1003,28 +1195,84 @@ if __name__ == "__main__":
         help="Energy criteria for precomplex optimization",
         default=10.0,
     )
+    parser.add_argument(
+        "--preoptimize",
+        "-p",
+        type=int,
+        help='Whehter to perform UFF optimization before gradual optimization',
+        default=1,
+    )
     parser.add_argument("--chg", type=int, help="Total charge of the system", default=0)
     parser.add_argument(
         "--mult", type=int, help="Total multiplicity of the system", default=1
     )
-    parser.add_argument("--RS",
-                        "-rs",
-                        action="store_true",
-                        help="sample R/S conformers when reaction center is chiral center"
+    parser.add_argument(
+        "--use_crest",
+        "-uc",
+        type=int,
+        help="Whether to sample several conformations with the CREST algorithm",
+        default=0,
     )
-    parser.add_argument("--EndoExo",
-                        "-nx",
-                        action="store_true",
-                        help="sample Endo/Exo conformers when ring is formed during the reaction"
+    parser.add_argument(
+        "--stereo_enumerate",
+        "-se",
+        type=int,
+        help="Whether consider several stereoisomers",
+        default=0,
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "--maximal_displacement",
+        "-md",
+        type=float,
+        help="Maximal displacement change for ",
+        default=10000,
+    )
+
+    parser.add_argument(
+        "--k",
+        type=float,
+        help="Force constant in UFF optimization",
+        default=50,
+    )
+
+    parser.add_argument(
+        "--window",
+        "-w",
+        type=float,
+        help="Screening criteria for removing same pseudo-TS",
+        default=0.5,
+    )
+
+    parser.add_argument(
+        "--use_h_content",
+        "-uh",
+        type=int,
+        help="Screening criteria for removing same pseudo-TS",
+        default=1,
+    )
+    
+    parser.add_argument(
+        "--check_connectivity",
+        "-cc",
+        type=int,
+        help="Screening criteria for removing same pseudo-TS",
+        default=1,
+    )
+
+    parser.add_argument(
+        "--check_stereo",
+        "-cs",
+        type=int,
+        help="Screening criteria for removing same pseudo-TS",
+        default=0,
+    )
+
+
+    args = parser.parse_args(sys.argv[2:])
     save_directory = args.save_directory
-    print(args)
-    if save_directory is None:
-        input_directory = args.input
-        names = input_directory.split("/")
-        save_directory = "/".join(names[:-1])
+    working_directory = args.working_directory
+    print("generator.py input options", sys.argv[1])
     if args.calculator == "gaussian":
         calculator = gaussian.Gaussian()
     else:
@@ -1034,6 +1282,8 @@ if __name__ == "__main__":
         args.ts_scale,
         args.form_scale,
         args.break_scale,
+        args.protect_scale,
+        args.max_separation,
         args.step_size,
         args.qc_step_size,
         args.num_relaxation,
@@ -1041,25 +1291,61 @@ if __name__ == "__main__":
     generator.library = args.library
     generator.num_conformer = args.num_conformer
     generator.set_energy_criteria(args.energy_criteria)
+    generator.maximal_displcement = args.maximal_displacement
+    generator.k = args.k
+    generator.scan_num_relaxation = args.scan_num_relaxation
+    generator.scan_qc_step_size = args.scan_qc_step_size
+    generator.window = args.window
+    generator.num_process = args.num_process
+        
+    generator.use_crest = bool(args.use_crest)
+    generator.enumerate_stereo = bool(args.stereo_enumerate)
+    generator.check_connectivity = bool(args.check_connectivity)
+    generator.check_stereo = bool(args.check_stereo)
 
-    generator.considerRS = args.RS
-    generator.considerEndoExo = args.EndoExo
+    generator.preoptimize = bool(args.preoptimize)
+    print (generator.preoptimize)
 
-    if ">>" in args.input:
+    if ">>" in sys.argv[1]:
         (
             RP_pairs,
             reaction_info,
             mapping_info,
             matching_results,
         ) = generator.get_oriented_RPs_from_smiles(
-            args.input, save_directory=save_directory
+            sys.argv[1],
+            save_directory=save_directory,
+            working_directory=working_directory,
         )
     else:
+        input_directory = sys.argv[1]
+        folder_directory = os.path.dirname(input_directory)
+        if folder_directory is None:
+            folder_directory = os.getcwd()
+        if save_directory is None:
+            save_directory = folder_directory
+         
+        # Check h_content
+        if args.use_h_content == 1:
+            try:
+                h_file_directory = os.path.join(folder_directory,'h_content')
+                h_content = ''
+                with open(h_file_directory) as f:
+                    for line in f:
+                        h_content = h_content + line
+            except:
+                h_content = None
+        else:
+            h_content = None
+        print(h_content)
+        generator.h_content = h_content
         (
             RP_pairs,
             reaction_info,
             mapping_info,
             matching_results,
         ) = generator.get_oriented_RPs_from_geometry(
-            args.input, save_directory=save_directory
+            input_directory,
+            save_directory=save_directory,
+            working_directory=working_directory,
         )

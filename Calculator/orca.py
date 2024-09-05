@@ -181,6 +181,19 @@ class Orca:
         if return_data:
             return data
 
+    def relax_geometry_steep(self,molecule,constraints,chg=None,multiplicity=None,file_name='test',num_relaxation=5,maximal_displacement=1000,return_data=False):
+        '''
+        '''
+        if maximal_displacement > 0:
+            maximal_displacement=-maximal_displacement
+        if num_relaxation is None:
+            extra = f'Trust {maximal_displacement}\n'
+        else:
+            extra = f'Trust {maximal_displacement}\nMaxIter {num_relaxation}\n'
+        data = self.optimize_geometry(molecule,constraints,chg,multiplicity,file_name,extra,return_data)
+        if return_data:
+            return data
+
     def parse_energy(self, file_name):
         engradpath = '{}.energy'.format(file_name)
         with open(engradpath) as engradfile:

@@ -533,8 +533,12 @@ def getFC(atom_list,BO,chg,TotalChargeMethod='SumofFragments'):
             if BondCount==3 or BondCount==5: fc=0
             if BondCount==2 or BondCount==4: fc=1
         else:
-            lonepair=(4-BondCount)*2
             period,group = atom_list[i].get_period_group()
+            if group >= 4:
+                lonepair=(4-BondCount)*2
+            else:
+                lonepair=(group-BondCount) * 2
+
             fc=group-BondCount-lonepair
         FC.append(int(fc))
         '''
