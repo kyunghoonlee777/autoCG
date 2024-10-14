@@ -2,7 +2,7 @@
 
 ## Overview of Implementation
 
-The main advantage of pyMCD is that it can be easily interfaced with any QC package. Here, we explain how users can implement a module for interfacing with their available QC package in detail.
+To interface autoCG with other QC packages, you need to implement new python scripts. (We may extend some other QC packages if requested, but it will take some time because we need to get used to those programs) Here, we explain how users can implement a module for interfacing with their available QC package in detail.
 
 Basically, you need to add your own module in the ‘Calculator’ folder for interfacing with a new QC package. In the folder, you will already see three scripts: gaussian.py, orca.py, and template.py. 
 
@@ -100,39 +100,4 @@ if maximal_displacement < 100:
         max_step = int(maximal_displacement*100) + 1
     extra = f'(modredundant,loose,maxcycles={num_relaxation},maxstep={max_step},notrust) Symmetry=None'
 ```
-
-## Modification in run.py
-
-Once you have implemented your own module in the Calculator, you need to build your own implemented object in run.py. In the function get_calculator, it builds an object with a sub-module in the Calculator. In the current version, it supports two types of objects: Gaussian and Orca. They are created as follows:
-
-```python
-calculator_name = args.calculator.lower()
-if calculator_name == 'gaussian':
-        from pyMCD.Calculator import gaussian
-    calculator = gaussian.Gaussian(args.command)
-elif calculator_name == 'orca':
-    from pyMCD.Calculator import orca
-    calculator = orca.Orca()
-calculator.load_content(os.path.join(args.input_directory,'qc_input'))
-basis_file = os.path.join(args.input_directory,'basis') # For Effective Core Potential
-if os.path.exists(basis_file):
-    calculator.load_basis(basis_file)
-return calculator
-```
-
-Here, depending on your class name, add new module with the following form:
-
-```python
-if calculator_name == 'gaussian':
-        from pyMCD.Calculator import gaussian
-    calculator = gaussian.Gaussian(args.command)
-elif calculator_name == 'orca':
-    from pyMCD.Calculator import orca
-    calculator = orca.Orca()
-elif calculator_name == 'name of new class': # New implementing part !
-        from pyMCD.Calculator import "QCpackage_name"
-        calculator = "QCpackage_name"."objectname"
-```
-
-After this, you may run the pyMCD with your available QC package!
 
