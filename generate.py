@@ -583,7 +583,7 @@ class GuessGenerator:
         energy_list = [self.calculator.get_energy(reactant)]
         self.write_optimization(reactant, file_name, "w")
         old_content = self.calculator.content
-        if h_content is not None:
+        if self.h_content is not None:
             self.calculator.content = self.h_content
         for i in range(self.num_step):
             self.calculator.relax_geometry_steep(
@@ -794,16 +794,6 @@ class GuessGenerator:
         self.write_log(f"Starting time: {starttime}\n\n")
         self.write_log(f"All guesses will be saved in {self.save_directory}\n")
 
-        # Check reaction_info
-        bond_breaks = reaction_info['b']
-        adj_matrix = reactant.get_adj_matrix()
-        for bond in bond_breaks:
-            s, e = bond
-            if adj_matrix[s][e] == 0:
-                print ('Wrong reaction info is given !!!')
-                print ('Check the input again !!!')
-                exit()
-
         if reaction_info is None:
             self.write_log("Finding reaction information with gurobi!\n")
             if reactant is None or product is None:
@@ -819,6 +809,17 @@ class GuessGenerator:
                 exit()
         else:
             self.write_log("Using the provided reaction!\n")
+
+        # Check reaction_info
+        bond_breaks = reaction_info['b']
+        adj_matrix = reactant.get_adj_matrix()
+        for bond in bond_breaks:
+            s, e = bond
+            if adj_matrix[s][e] == 0:
+                print ('Wrong reaction info is given !!!')
+                print ('Check the input again !!!')
+                exit()
+
         reactant_copy = reactant.copy()
         if chg is not None:
             reactant_copy.chg = chg
@@ -887,7 +888,7 @@ class GuessGenerator:
         bond_list = molecule.get_bond_list(False)
         self.write_log("Set up done!!!\n")
         if chg is None:
-            chg = molecule.chg
+            chg = molecule.get_chg()
             if chg is None:
                 print("Charge is not given !!!")
         if multiplicity is None:
@@ -993,12 +994,36 @@ class GuessGenerator:
         product_smiles = smiles_list[1]
         # Reactant must have geometry ...
         # rd_reactant = Chem.MolFromSmiles(reactant_smiles)
+
         reactant = chem.Intermediate(reactant_smiles)
         product = chem.Intermediate(product_smiles)
+        
+        # Check atom mapping ...
+        reaction_info = None
+        n = len(reactant.atom_list)
+        if str(n) in reactant_smiles:
+            print ('mapping exists !!!')
+            r_adj_matrix = reactant.get_adj_matrix()
+            p_adj_matrix = product.get_adj_matrix()
+            bond_forms = np.stack(np.where(p_adj_matrix > r_adj_matrix),axis=1).tolist()
+            bond_breaks = np.stack(np.where(p_adj_matrix < r_adj_matrix),axis=1).tolist()
+
+            reaction_info = dict()
+            reaction_info['b'] = []
+            reaction_info['f'] = []
+            for bond_form in bond_forms:
+                s, e = bond_form
+                if s < e:
+                    reaction_info['f'].append((s,e))
+            for bond_break in bond_breaks:
+                s, e = bond_break
+                if s < e:
+                    reaction_info['b'].append((s,e))
+
         return self.get_oriented_RPs(
             reactant,
             product,
-            None,
+            reaction_info,
             chg=chg,
             multiplicity=multiplicity,
             save_directory=save_directory,
@@ -1095,13 +1120,6 @@ if __name__ == "__main__":
         default="rdkit",
     )
     parser.add_argument(
-        "--calculator",
-        "-ca",
-        type=str,
-        help="Using calculator for constraint optimization",
-        default="orca",
-    )
-    parser.add_argument(
         "--num_conformer",
         "-nc",
         type=int,
@@ -1119,7 +1137,7 @@ if __name__ == "__main__":
         "--num_relaxation",
         "-nr",
         type=int,
-        help="Number of relaxation during each scan",
+        help="Number of relaxation during conformation relaxation",
         default=7,
     )
 
@@ -1273,7 +1291,12 @@ if __name__ == "__main__":
     save_directory = args.save_directory
     working_directory = args.working_directory
     print("generator.py input options", sys.argv[1])
-    if args.calculator == "gaussian":
+    try:
+        calculator_name = os.environ['CALCULATOR']
+    except:
+        calculator_name = 'gaussian'
+    
+    if calculator_name == "gaussian":
         calculator = gaussian.Gaussian()
     else:
         calculator = orca.Orca()

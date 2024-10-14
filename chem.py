@@ -436,7 +436,7 @@ class Molecule:
             pass
 
         elif type(data) == str:
-            if data[-4] == '.':
+            if data.endswith('.xyz') or data.endswith('.com'):
                 conformer = Conformer(data)
                 # At least make adjacency
                 self.atom_list = conformer.atom_list
@@ -452,16 +452,27 @@ class Molecule:
                     Chem.SanitizeMol(rd_mol,sanitizeOps = Chem.SanitizeFlags.SANITIZE_ALL^Chem.SanitizeFlags.SANITIZE_ADJUSTHS)
                     ace_mol = process.get_ace_mol_from_rd_mol(rd_mol)
                 except:
-                    from openbabel import pybel
-                    ob_mol = pybel.readstring('smi',data)
-                    ace_mol = process.get_ace_mol_from_ob_mol(ob_mol)
-                self.atom_list = ace_mol.atom_list
-                self.atom_feature = ace_mol.atom_feature
-                self.adj_matrix = ace_mol.adj_matrix
-                self.bo_matrix = ace_mol.bo_matrix
-                self.chg = np.sum(self.atom_feature['chg'])
-                self.smiles = data
-          
+                    ace_mol = None
+
+                if ace_mol is not None:
+                    # Permute molecule if mapping exists ...
+                    rd_atoms = rd_mol.GetAtoms()
+                    atom_mapping = dict()
+                    map_values = set([])
+                    for i, rd_atom in enumerate(rd_atoms):
+                        map_num = rd_atom.GetAtomMapNum() - 1
+                        map_values.add(map_num)
+                        atom_mapping[i] = map_num
+                    # Correct mapping ...    
+                    if len(atom_mapping) == len(rd_atoms) and len(map_values) == len(rd_atoms):
+                        ace_mol = process.get_permuted_molecule(ace_mol,atom_mapping)
+                    self.atom_list = ace_mol.atom_list
+                    self.atom_feature = ace_mol.atom_feature
+                    self.adj_matrix = ace_mol.adj_matrix
+                    self.bo_matrix = ace_mol.bo_matrix
+                    self.chg = np.sum(self.atom_feature['chg'])
+                    self.smiles = data
+                              
         else:
             try:
                 len(data[0]) # Then, it's some kind of list,tuple,numpy
@@ -1055,42 +1066,6 @@ class Molecule:
         Chem.SanitizeMol(rd_mol)
         return rd_mol
 
-    def get_ob_mol(self,include_stereo=False):
-        """
-        Returns molecule with type pyclass 'openbabel.OBMol' from our type pyclass 'Molecule'
-        Note that atom ordering and bond order is well preserved
-        :param include_stereo(boolean):
-            Do not touch this option, we have not develop options for molecule that considers stereocenter 
-        
-        :return rd_mol(pyclass 'openbabel.OBMol'):
-        """
-        from openbabel import openbabel
-
-        ob_mol = openbabel.OBMol()
-        atom_list = self.atom_list
-        bond_list = self.get_bond_list(True)
-        n = len(atom_list)
-        z_list = self.get_z_list()
-        chg_list = None
-        atom_feature = self.atom_feature
-        if atom_feature is not None and 'chg' in atom_feature:
-            chg_list = atom_feature['chg']
-        # Generate atoms
-        for i in range(n):
-            atom = atom_list[i]
-            ob_atom = ob_mol.NewAtom()
-            z = int(atom.get_atomic_number())
-            ob_atom.SetAtomicNum(z)
-            ob_atom.SetFormalCharge(int(chg_list[i]))
-        # Generate bonds
-        for bond in bond_list:
-            ob_mol.AddBond(bond[0]+1,bond[1]+1,bond[2])                
-        '''
-        else:
-            import pybel
-            ob_mol = pybel.readstring('smi',self.smiles)
-        '''
-        return ob_mol
 
     def sanitize(self):
         adj_matrix = self.get_adj_matrix()
@@ -1246,7 +1221,6 @@ class Molecule:
             #print(f"{converged_conformer_id_list} CONVERGED")
 
             #for conformer_id in converged_conformer_id_list:
-            print ('Conformer XYZs ...')
             for conformer_id in conformer_id_list:
                 conformer = conformers[conformer_id]
                 #energy = conformer_energy_list[conformer_id]
@@ -1256,30 +1230,6 @@ class Molecule:
                     position = conformer.GetAtomPosition(i) 
                     coordinate_list.append((position[0],position[1],position[2]))
                    # print(virtual_molecule.atom_list[i].get_element(),position[0], position[1], position[2])
-                if len(coordinate_list) > 0:
-                    coordinate_list = np.array(coordinate_list)
-                    coordinates.append(coordinate_list)
-        elif library == 'babel': 
-            from openbabel import pybel
-            from openbabel import openbabel 
-            import os
-            #### pybel method
-            try:
-                ob_mol = self.get_ob_mol()
-            except:
-                virtual_molecule,changed_indices = self.get_valid_molecule()
-                ob_mol = virtual_molecule.get_ob_mol()
-            pybel_mol = pybel.Molecule(ob_mol)
-            for i in range(num_conformer):
-                coordinate_list = []
-                pybel_mol.make3D()
-                pybel_mol.localopt('uff',1000)
-                pybel_atom_list = pybel_mol.atoms
-                #print ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
-                for atom in pybel_atom_list:
-                    position = atom.coords
-                    coordinate_list.append((position[0],position[1],position[2]))
-                    #print (atom.atomicnum,position[0],position[1],position[2])
                 if len(coordinate_list) > 0:
                     coordinate_list = np.array(coordinate_list)
                     coordinates.append(coordinate_list)

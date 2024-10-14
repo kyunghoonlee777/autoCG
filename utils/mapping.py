@@ -55,6 +55,7 @@ def ReactionMap(R_atom, P_atom, R_bond, P_bond, maxSol=1, printRes=False):
         for j in range(i+1, num_R_atom):
             P_p_bond.append((i, j))
 
+    #print (P_atom, P_p_atom)
     P_atom_all = P_atom + P_p_atom
     P_bond_all = P_bond + P_p_bond
     num_P_atom_all= len(P_atom_all)

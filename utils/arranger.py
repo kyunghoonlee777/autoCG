@@ -162,6 +162,7 @@ def get_bond_change(intermediate_i,intermediate_j,num_solution = 1):
         Note that bond is not the bond order, which means changing bond order 2 to 1 does not imply that the bond is broken
 
     """
+
     # First check whether comparison is possible
     if len(intermediate_i.atom_list) != len(intermediate_j.atom_list):
         print ('impossible to calculate CD!!!')
@@ -174,8 +175,8 @@ def get_bond_change(intermediate_i,intermediate_j,num_solution = 1):
     index_function_j = dict()
     index_inverse_function_j = dict()
     z_permutation = find_permutation_with_respect_to_z(intermediate_i,intermediate_j)
-    z_list_i = intermediate_i.get_z_list()
-    z_list_j = intermediate_j.get_z_list()
+    z_list_i = list(intermediate_i.get_z_list())
+    z_list_j = list(intermediate_j.get_z_list())
     bond_list_i = intermediate_i.get_bond_list(False)
     bond_list_j = intermediate_j.get_bond_list(False)
     bond_list_j = get_permuted_bond_list(bond_list_j,z_permutation)
